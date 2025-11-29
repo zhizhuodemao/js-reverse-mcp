@@ -1,403 +1,196 @@
-# Chrome DevTools MCP
+# JS Reverse MCP
 
-[![npm chrome-devtools-mcp package](https://img.shields.io/npm/v/chrome-devtools-mcp.svg)](https://npmjs.org/package/chrome-devtools-mcp)
+JavaScript 逆向工程 MCP 服务器，让你的 AI 编码助手（如 Claude、Cursor、Copilot）能够调试和分析网页中的 JavaScript 代码。
 
-`chrome-devtools-mcp` lets your coding agent (such as Gemini, Claude, Cursor or Copilot)
-control and inspect a live Chrome browser. It acts as a Model-Context-Protocol
-(MCP) server, giving your AI coding assistant access to the full power of
-Chrome DevTools for reliable automation, in-depth debugging, and performance analysis.
+## 功能特点
 
-## [Tool reference](./docs/tool-reference.md) | [Changelog](./CHANGELOG.md) | [Contributing](./CONTRIBUTING.md) | [Troubleshooting](./docs/troubleshooting.md)
+- **脚本分析**: 列出所有加载的 JS 脚本，搜索代码，获取源码
+- **断点调试**: 设置/移除断点，支持条件断点，支持在压缩代码中精确定位
+- **函数追踪**: Hook 任意函数（包括模块内部函数），监控调用和返回值
+- **执行控制**: 暂停/恢复执行，单步调试（step over/into/out）
+- **运行时检查**: 在断点处求值表达式，检查作用域变量
+- **网络分析**: 查看请求发起的调用栈，设置 XHR 断点
+- **事件监控**: 监控 DOM 事件，检查存储数据
 
-## Key features
+## 系统要求
 
-- **Get performance insights**: Uses [Chrome
-  DevTools](https://github.com/ChromeDevTools/devtools-frontend) to record
-  traces and extract actionable performance insights.
-- **Advanced browser debugging**: Analyze network requests, take screenshots and
-  check the browser console.
-- **Reliable automation**. Uses
-  [puppeteer](https://github.com/puppeteer/puppeteer) to automate actions in
-  Chrome and automatically wait for action results.
+- [Node.js](https://nodejs.org/) v20.19 或更新版本
+- [Chrome](https://www.google.com/chrome/) 稳定版
+- Git
 
-## Disclaimers
+## 本地安装
 
-`chrome-devtools-mcp` exposes content of the browser instance to the MCP clients
-allowing them to inspect, debug, and modify any data in the browser or DevTools.
-Avoid sharing sensitive or personal information that you don't want to share with
-MCP clients.
+```bash
+# 克隆仓库
+git clone https://github.com/zhizhuodemao/js-reverse-mcp.git
+cd js-reverse-mcp
 
-## Requirements
+# 安装依赖
+npm install
 
-- [Node.js](https://nodejs.org/) v20.19 or a newer [latest maintenance LTS](https://github.com/nodejs/Release#release-schedule) version.
-- [Chrome](https://www.google.com/chrome/) current stable version or newer.
-- [npm](https://www.npmjs.com/).
+# 构建项目
+npm run build
+```
 
-## Getting started
+## MCP 客户端配置
 
-Add the following config to your MCP client:
+在你的 MCP 客户端配置文件中添加：
 
 ```json
 {
   "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
-      "args": ["-y", "chrome-devtools-mcp@latest"]
+    "js-reverse": {
+      "command": "node",
+      "args": ["/你的路径/js-reverse-mcp/build/src/index.js"]
     }
   }
 }
 ```
 
-> [!NOTE]  
-> Using `chrome-devtools-mcp@latest` ensures that your MCP client will always use the latest version of the Chrome DevTools MCP server.
-
-### MCP Client configuration
-
-<details>
-  <summary>Amp</summary>
-  Follow https://ampcode.com/manual#mcp and use the config provided above. You can also install the Chrome DevTools MCP server using the CLI:
+### Claude Code
 
 ```bash
-amp mcp add chrome-devtools -- npx chrome-devtools-mcp@latest
+claude mcp add js-reverse node /你的路径/js-reverse-mcp/build/src/index.js
 ```
 
-</details>
+### Cursor
 
-<details>
-  <summary>Antigravity</summary>
+进入 `Cursor Settings` -> `MCP` -> `New MCP Server`，使用上面的配置。
 
-To use the Chrome DevTools MCP server follow the instructions from <a href="https://antigravity.google/docs/mcp">Antigravity's docs<a/> to install a custom MCP server. Add the following config to the MCP servers config:
+### VS Code Copilot
 
 ```bash
-{
-  "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
-      "args": [
-        "chrome-devtools-mcp@latest",
-        "--browser-url=http://127.0.0.1:9222",
-        "-y"
-      ]
-    }
-  }
-}
+code --add-mcp '{"name":"js-reverse","command":"node","args":["/你的路径/js-reverse-mcp/build/src/index.js"]}'
 ```
 
-This will make the Chrome DevTools MCP server automatically connect to the browser that Antigravity is using. If you are not using port 9222, make sure to adjust accordingly.
+## 工具列表
 
-</details>
+### 脚本分析
+| 工具 | 描述 |
+|------|------|
+| `list_scripts` | 列出页面中所有加载的 JavaScript 脚本 |
+| `get_script_source` | 获取脚本源码，支持行范围或字符偏移（适用于压缩文件） |
+| `find_in_script` | 在脚本中查找文本，返回精确的行号和列号 |
+| `search_in_sources` | 在所有脚本中搜索字符串或正则表达式 |
 
-<details>
-  <summary>Claude Code</summary>
-    Use the Claude Code CLI to add the Chrome DevTools MCP server (<a href="https://docs.anthropic.com/en/docs/claude-code/mcp">guide</a>):
+### 断点管理
+| 工具 | 描述 |
+|------|------|
+| `set_breakpoint` | 在指定 URL 和行号设置断点 |
+| `set_breakpoint_on_text` | 通过搜索代码文本自动设置断点（适用于压缩代码） |
+| `remove_breakpoint` | 移除断点 |
+| `list_breakpoints` | 列出所有活动断点 |
 
-```bash
-claude mcp add chrome-devtools npx chrome-devtools-mcp@latest
+### 调试控制
+| 工具 | 描述 |
+|------|------|
+| `get_paused_info` | 获取暂停状态、调用栈和作用域变量 |
+| `resume` | 恢复执行 |
+| `pause` | 暂停执行 |
+| `step_over` | 单步跳过 |
+| `step_into` | 单步进入 |
+| `step_out` | 单步跳出 |
+| `evaluate_on_callframe` | 在暂停的调用帧上下文中求值表达式 |
+
+### 函数 Hook
+| 工具 | 描述 |
+|------|------|
+| `hook_function` | Hook 全局函数或对象方法，记录调用和返回值 |
+| `unhook_function` | 移除函数 Hook |
+| `list_hooks` | 列出所有活动的 Hook |
+| `trace_function` | 追踪任意函数调用（包括模块内部函数），使用条件断点实现 |
+
+### 网络调试
+| 工具 | 描述 |
+|------|------|
+| `get_request_initiator` | 获取网络请求的 JavaScript 调用栈 |
+| `break_on_xhr` | 设置 XHR/Fetch 断点 |
+| `remove_xhr_breakpoint` | 移除 XHR 断点 |
+
+### 检查工具
+| 工具 | 描述 |
+|------|------|
+| `inspect_object` | 深度检查 JavaScript 对象结构 |
+| `get_storage` | 获取 cookies、localStorage、sessionStorage |
+| `monitor_events` | 监控元素或 window 上的 DOM 事件 |
+| `stop_monitor` | 停止事件监控 |
+
+### 页面导航
+| 工具 | 描述 |
+|------|------|
+| `list_pages` | 列出浏览器中打开的页面 |
+| `select_page` | 选择一个页面作为调试上下文 |
+| `new_page` | 创建新页面并导航到 URL |
+| `navigate_page` | 导航当前页面 |
+
+### 其他工具
+| 工具 | 描述 |
+|------|------|
+| `take_screenshot` | 截取页面截图 |
+| `take_snapshot` | 获取页面 DOM 快照 |
+| `evaluate_script` | 在页面中执行 JavaScript |
+| `list_console_messages` | 获取控制台消息 |
+| `list_network_requests` | 列出网络请求 |
+| `get_network_request` | 获取请求详情和响应内容 |
+
+## 使用示例
+
+### 基本流程
+
+1. **选择页面**
+```
+列出所有页面并选择要调试的页面
 ```
 
-</details>
-
-<details>
-  <summary>Cline</summary>
-  Follow https://docs.cline.bot/mcp/configuring-mcp-servers and use the config provided above.
-</details>
-
-<details>
-  <summary>Codex</summary>
-  Follow the <a href="https://github.com/openai/codex/blob/main/docs/advanced.md#model-context-protocol-mcp">configure MCP guide</a>
-  using the standard config from above. You can also install the Chrome DevTools MCP server using the Codex CLI:
-
-```bash
-codex mcp add chrome-devtools -- npx chrome-devtools-mcp@latest
+2. **查找目标函数**
+```
+搜索包含 "encrypt" 的代码
 ```
 
-**On Windows 11**
-
-Configure the Chrome install location and increase the startup timeout by updating `.codex/config.toml` and adding the following `env` and `startup_timeout_ms` parameters:
-
+3. **设置断点**
 ```
-[mcp_servers.chrome-devtools]
-command = "cmd"
-args = [
-    "/c",
-    "npx",
-    "-y",
-    "chrome-devtools-mcp@latest",
-]
-env = { SystemRoot="C:\\Windows", PROGRAMFILES="C:\\Program Files" }
-startup_timeout_ms = 20_000
+在加密函数上设置断点
 ```
 
-</details>
-
-<details>
-  <summary>Copilot CLI</summary>
-
-Start Copilot CLI:
-
+4. **触发并分析**
 ```
-copilot
+触发操作，在断点处检查参数和调用栈
 ```
 
-Start the dialog to add a new MCP server by running:
+### Hook 加密函数
 
 ```
-/mcp add
+Hook fetch 函数，记录所有 API 调用的参数和返回值
 ```
 
-Configure the following fields and press `CTRL+S` to save the configuration:
-
-- **Server name:** `chrome-devtools`
-- **Server Type:** `[1] Local`
-- **Command:** `npx -y chrome-devtools-mcp@latest`
-
-</details>
-
-<details>
-  <summary>Copilot / VS Code</summary>
-  Follow the MCP install <a href="https://code.visualstudio.com/docs/copilot/chat/mcp-servers#_add-an-mcp-server">guide</a>,
-  with the standard config from above. You can also install the Chrome DevTools MCP server using the VS Code CLI:
-  
-  ```bash
-  code --add-mcp '{"name":"chrome-devtools","command":"npx","args":["chrome-devtools-mcp@latest"]}'
-  ```
-</details>
-
-<details>
-  <summary>Cursor</summary>
-
-**Click the button to install:**
-
-[<img src="https://cursor.com/deeplink/mcp-install-dark.svg" alt="Install in Cursor">](https://cursor.com/en/install-mcp?name=chrome-devtools&config=eyJjb21tYW5kIjoibnB4IC15IGNocm9tZS1kZXZ0b29scy1tY3BAbGF0ZXN0In0%3D)
-
-**Or install manually:**
-
-Go to `Cursor Settings` -> `MCP` -> `New MCP Server`. Use the config provided above.
-
-</details>
-
-<details>
-  <summary>Factory CLI</summary>
-Use the Factory CLI to add the Chrome DevTools MCP server (<a href="https://docs.factory.ai/cli/configuration/mcp">guide</a>):
-
-```bash
-droid mcp add chrome-devtools "npx -y chrome-devtools-mcp@latest"
-```
-
-</details>
-
-<details>
-  <summary>Gemini CLI</summary>
-Install the Chrome DevTools MCP server using the Gemini CLI.
-
-**Project wide:**
-
-```bash
-gemini mcp add chrome-devtools npx chrome-devtools-mcp@latest
-```
-
-**Globally:**
-
-```bash
-gemini mcp add -s user chrome-devtools npx chrome-devtools-mcp@latest
-```
-
-Alternatively, follow the <a href="https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/mcp-server.md#how-to-set-up-your-mcp-server">MCP guide</a> and use the standard config from above.
-
-</details>
-
-<details>
-  <summary>Gemini Code Assist</summary>
-  Follow the <a href="https://cloud.google.com/gemini/docs/codeassist/use-agentic-chat-pair-programmer#configure-mcp-servers">configure MCP guide</a>
-  using the standard config from above.
-</details>
-
-<details>
-  <summary>JetBrains AI Assistant & Junie</summary>
-
-Go to `Settings | Tools | AI Assistant | Model Context Protocol (MCP)` -> `Add`. Use the config provided above.
-The same way chrome-devtools-mcp can be configured for JetBrains Junie in `Settings | Tools | Junie | MCP Settings` -> `Add`. Use the config provided above.
-
-</details>
-
-<details>
-  <summary>Kiro</summary>
-
-In **Kiro Settings**, go to `Configure MCP` > `Open Workspace or User MCP Config` > Use the configuration snippet provided above.
-
-Or, from the IDE **Activity Bar** > `Kiro` > `MCP Servers` > `Click Open MCP Config`. Use the configuration snippet provided above.
-
-</details>
-
-<details>
-  <summary>Qoder</summary>
-
-In **Qoder Settings**, go to `MCP Server` > `+ Add` > Use the configuration snippet provided above.
-
-Alternatively, follow the <a href="https://docs.qoder.com/user-guide/chat/model-context-protocol">MCP guide</a> and use the standard config from above.
-
-</details>
-
-<details>
-  <summary>Visual Studio</summary>
-  
-  **Click the button to install:**
-  
-  [<img src="https://img.shields.io/badge/Visual_Studio-Install-C16FDE?logo=visualstudio&logoColor=white" alt="Install in Visual Studio">](https://vs-open.link/mcp-install?%7B%22name%22%3A%22chrome-devtools%22%2C%22command%22%3A%22npx%22%2C%22args%22%3A%5B%22chrome-devtools-mcp%40latest%22%5D%7D)
-</details>
-
-<details>
-  <summary>Warp</summary>
-
-Go to `Settings | AI | Manage MCP Servers` -> `+ Add` to [add an MCP Server](https://docs.warp.dev/knowledge-and-collaboration/mcp#adding-an-mcp-server). Use the config provided above.
-
-</details>
-
-<details>
-  <summary>Windsurf</summary>
-  Follow the <a href="https://docs.windsurf.com/windsurf/cascade/mcp#mcp-config-json">configure MCP guide</a>
-  using the standard config from above.
-</details>
-
-### Your first prompt
-
-Enter the following prompt in your MCP Client to check if everything is working:
+### 追踪模块内部函数
 
 ```
-Check the performance of https://developers.chrome.com
+使用 trace_function 追踪 webpack 打包的内部函数 "encryptData"
 ```
 
-Your MCP client should open the browser and record a performance trace.
+## 配置选项
 
-> [!NOTE]  
-> The MCP server will start the browser automatically once the MCP client uses a tool that requires a running browser instance. Connecting to the Chrome DevTools MCP server on its own will not automatically start the browser.
+| 选项 | 描述 |
+|------|------|
+| `--browserUrl, -u` | 连接到运行中的 Chrome 实例 |
+| `--wsEndpoint, -w` | WebSocket 端点连接 |
+| `--headless` | 无头模式运行（默认: false） |
+| `--executablePath, -e` | 自定义 Chrome 路径 |
+| `--isolated` | 使用临时用户数据目录 |
+| `--channel` | Chrome 通道: stable, canary, beta, dev |
+| `--viewport` | 初始视口大小，如 `1280x720` |
 
-## Tools
-
-If you run into any issues, checkout our [troubleshooting guide](./docs/troubleshooting.md).
-
-<!-- BEGIN AUTO GENERATED TOOLS -->
-
-- **Input automation** (8 tools)
-  - [`click`](docs/tool-reference.md#click)
-  - [`drag`](docs/tool-reference.md#drag)
-  - [`fill`](docs/tool-reference.md#fill)
-  - [`fill_form`](docs/tool-reference.md#fill_form)
-  - [`handle_dialog`](docs/tool-reference.md#handle_dialog)
-  - [`hover`](docs/tool-reference.md#hover)
-  - [`press_key`](docs/tool-reference.md#press_key)
-  - [`upload_file`](docs/tool-reference.md#upload_file)
-- **Navigation automation** (6 tools)
-  - [`close_page`](docs/tool-reference.md#close_page)
-  - [`list_pages`](docs/tool-reference.md#list_pages)
-  - [`navigate_page`](docs/tool-reference.md#navigate_page)
-  - [`new_page`](docs/tool-reference.md#new_page)
-  - [`select_page`](docs/tool-reference.md#select_page)
-  - [`wait_for`](docs/tool-reference.md#wait_for)
-- **Emulation** (2 tools)
-  - [`emulate`](docs/tool-reference.md#emulate)
-  - [`resize_page`](docs/tool-reference.md#resize_page)
-- **Performance** (3 tools)
-  - [`performance_analyze_insight`](docs/tool-reference.md#performance_analyze_insight)
-  - [`performance_start_trace`](docs/tool-reference.md#performance_start_trace)
-  - [`performance_stop_trace`](docs/tool-reference.md#performance_stop_trace)
-- **Network** (2 tools)
-  - [`get_network_request`](docs/tool-reference.md#get_network_request)
-  - [`list_network_requests`](docs/tool-reference.md#list_network_requests)
-- **Debugging** (5 tools)
-  - [`evaluate_script`](docs/tool-reference.md#evaluate_script)
-  - [`get_console_message`](docs/tool-reference.md#get_console_message)
-  - [`list_console_messages`](docs/tool-reference.md#list_console_messages)
-  - [`take_screenshot`](docs/tool-reference.md#take_screenshot)
-  - [`take_snapshot`](docs/tool-reference.md#take_snapshot)
-
-<!-- END AUTO GENERATED TOOLS -->
-
-## Configuration
-
-The Chrome DevTools MCP server supports the following configuration option:
-
-<!-- BEGIN AUTO GENERATED OPTIONS -->
-
-- **`--browserUrl`, `-u`**
-  Connect to a running Chrome instance using port forwarding. For more details see: https://developer.chrome.com/docs/devtools/remote-debugging/local-server.
-  - **Type:** string
-
-- **`--wsEndpoint`, `-w`**
-  WebSocket endpoint to connect to a running Chrome instance (e.g., ws://127.0.0.1:9222/devtools/browser/<id>). Alternative to --browserUrl.
-  - **Type:** string
-
-- **`--wsHeaders`**
-  Custom headers for WebSocket connection in JSON format (e.g., '{"Authorization":"Bearer token"}'). Only works with --wsEndpoint.
-  - **Type:** string
-
-- **`--headless`**
-  Whether to run in headless (no UI) mode.
-  - **Type:** boolean
-  - **Default:** `false`
-
-- **`--executablePath`, `-e`**
-  Path to custom Chrome executable.
-  - **Type:** string
-
-- **`--isolated`**
-  If specified, creates a temporary user-data-dir that is automatically cleaned up after the browser is closed.
-  - **Type:** boolean
-  - **Default:** `false`
-
-- **`--channel`**
-  Specify a different Chrome channel that should be used. The default is the stable channel version.
-  - **Type:** string
-  - **Choices:** `stable`, `canary`, `beta`, `dev`
-
-- **`--logFile`**
-  Path to a file to write debug logs to. Set the env variable `DEBUG` to `*` to enable verbose logs. Useful for submitting bug reports.
-  - **Type:** string
-
-- **`--viewport`**
-  Initial viewport size for the Chrome instances started by the server. For example, `1280x720`. In headless mode, max size is 3840x2160px.
-  - **Type:** string
-
-- **`--proxyServer`**
-  Proxy server configuration for Chrome passed as --proxy-server when launching the browser. See https://www.chromium.org/developers/design-documents/network-settings/ for details.
-  - **Type:** string
-
-- **`--acceptInsecureCerts`**
-  If enabled, ignores errors relative to self-signed and expired certificates. Use with caution.
-  - **Type:** boolean
-
-- **`--chromeArg`**
-  Additional arguments for Chrome. Only applies when Chrome is launched by chrome-devtools-mcp.
-  - **Type:** array
-
-- **`--categoryEmulation`**
-  Set to false to exclude tools related to emulation.
-  - **Type:** boolean
-  - **Default:** `true`
-
-- **`--categoryPerformance`**
-  Set to false to exclude tools related to performance.
-  - **Type:** boolean
-  - **Default:** `true`
-
-- **`--categoryNetwork`**
-  Set to false to exclude tools related to network.
-  - **Type:** boolean
-  - **Default:** `true`
-
-<!-- END AUTO GENERATED OPTIONS -->
-
-Pass them via the `args` property in the JSON configuration. For example:
+### 示例配置
 
 ```json
 {
   "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
+    "js-reverse": {
+      "command": "node",
       "args": [
-        "chrome-devtools-mcp@latest",
-        "--channel=canary",
-        "--headless=true",
+        "/你的路径/js-reverse-mcp/build/src/index.js",
+        "--headless=false",
         "--isolated=true"
       ]
     }
@@ -405,61 +198,28 @@ Pass them via the `args` property in the JSON configuration. For example:
 }
 ```
 
-### Connecting via WebSocket with custom headers
+### 连接到已运行的 Chrome
 
-You can connect directly to a Chrome WebSocket endpoint and include custom headers (e.g., for authentication):
+1. 启动 Chrome（需要关闭所有 Chrome 窗口后重新启动）：
 
-```json
-{
-  "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
-      "args": [
-        "chrome-devtools-mcp@latest",
-        "--wsEndpoint=ws://127.0.0.1:9222/devtools/browser/<id>",
-        "--wsHeaders={\"Authorization\":\"Bearer YOUR_TOKEN\"}"
-      ]
-    }
-  }
-}
+**macOS**
+```bash
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-debug
 ```
 
-To get the WebSocket endpoint from a running Chrome instance, visit `http://127.0.0.1:9222/json/version` and look for the `webSocketDebuggerUrl` field.
+**Windows**
+```bash
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%TEMP%\chrome-debug"
+```
 
-You can also run `npx chrome-devtools-mcp@latest --help` to see all available configuration options.
-
-## Concepts
-
-### User data directory
-
-`chrome-devtools-mcp` starts a Chrome's stable channel instance using the following user
-data directory:
-
-- Linux / macOS: `$HOME/.cache/chrome-devtools-mcp/chrome-profile-$CHANNEL`
-- Windows: `%HOMEPATH%/.cache/chrome-devtools-mcp/chrome-profile-$CHANNEL`
-
-The user data directory is not cleared between runs and shared across
-all instances of `chrome-devtools-mcp`. Set the `isolated` option to `true`
-to use a temporary user data dir instead which will be cleared automatically after
-the browser is closed.
-
-### Connecting to a running Chrome instance
-
-You can connect to a running Chrome instance by using the `--browser-url` option. This is useful if you want to use your existing Chrome profile or if you are running the MCP server in a sandboxed environment that does not allow starting a new Chrome instance.
-
-Here is a step-by-step guide on how to connect to a running Chrome Stable instance:
-
-**Step 1: Configure the MCP client**
-
-Add the `--browser-url` option to your MCP client configuration. The value of this option should be the URL of the running Chrome instance. `http://127.0.0.1:9222` is a common default.
-
+2. 配置 MCP 连接：
 ```json
 {
   "mcpServers": {
-    "chrome-devtools": {
-      "command": "npx",
+    "js-reverse": {
+      "command": "node",
       "args": [
-        "chrome-devtools-mcp@latest",
+        "/你的路径/js-reverse-mcp/build/src/index.js",
         "--browser-url=http://127.0.0.1:9222"
       ]
     }
@@ -467,54 +227,10 @@ Add the `--browser-url` option to your MCP client configuration. The value of th
 }
 ```
 
-**Step 2: Start the Chrome browser**
+## 安全提示
 
-> [!WARNING]  
-> Enabling the remote debugging port opens up a debugging port on the running browser instance. Any application on your machine can connect to this port and control the browser. Make sure that you are not browsing any sensitive websites while the debugging port is open.
+此工具会将浏览器内容暴露给 MCP 客户端，允许检查、调试和修改浏览器中的任何数据。请勿在包含敏感信息的页面上使用。
 
-Start the Chrome browser with the remote debugging port enabled. Make sure to close any running Chrome instances before starting a new one with the debugging port enabled. The port number you choose must be the same as the one you specified in the `--browser-url` option in your MCP client configuration.
+## 许可证
 
-For security reasons, [Chrome requires you to use a non-default user data directory](https://developer.chrome.com/blog/remote-debugging-port) when enabling the remote debugging port. You can specify a custom directory using the `--user-data-dir` flag. This ensures that your regular browsing profile and data are not exposed to the debugging session.
-
-**macOS**
-
-```bash
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-profile-stable
-```
-
-**Linux**
-
-```bash
-/usr/bin/google-chrome --remote-debugging-port=9222 --user-data-dir=/tmp/chrome-profile-stable
-```
-
-**Windows**
-
-```bash
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222 --user-data-dir="%TEMP%\chrome-profile-stable"
-```
-
-**Step 3: Test your setup**
-
-After configuring the MCP client and starting the Chrome browser, you can test your setup by running a simple prompt in your MCP client:
-
-```
-Check the performance of https://developers.chrome.com
-```
-
-Your MCP client should connect to the running Chrome instance and receive a performance report.
-
-If you hit VM-to-host port forwarding issues, see the “Remote debugging between virtual machine (VM) and host fails” section in [`docs/troubleshooting.md`](./docs/troubleshooting.md#remote-debugging-between-virtual-machine-vm-and-host-fails).
-
-For more details on remote debugging, see the [Chrome DevTools documentation](https://developer.chrome.com/docs/devtools/remote-debugging/).
-
-## Known limitations
-
-### Operating system sandboxes
-
-Some MCP clients allow sandboxing the MCP server using macOS Seatbelt or Linux
-containers. If sandboxes are enabled, `chrome-devtools-mcp` is not able to start
-Chrome that requires permissions to create its own sandboxes. As a workaround,
-either disable sandboxing for `chrome-devtools-mcp` in your MCP client or use
-`--browser-url` to connect to a Chrome instance that you start manually outside
-of the MCP client sandbox.
+Apache-2.0
