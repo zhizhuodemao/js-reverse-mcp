@@ -40,7 +40,7 @@
   "mcpName": "io.github.zhizhuodemao/js-reverse-mcp",
   "devDependencies": {
     "@eslint/js": "^9.35.0",
-    "@modelcontextprotocol/sdk": "1.21.1",
+    "@modelcontextprotocol/sdk": "1.23.0",
     "@rollup/plugin-commonjs": "^29.0.0",
     "@rollup/plugin-json": "^6.1.0",
     "@rollup/plugin-node-resolve": "^16.0.3",
