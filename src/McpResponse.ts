@@ -372,7 +372,6 @@ export class McpResponse implements Response {
       response.push(`Emulating: ${cpuThrottlingRate}x slowdown`);
     }
 
-
     if (this.#includePages) {
       const parts = [`## Pages`];
       let idx = 0;

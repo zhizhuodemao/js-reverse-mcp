@@ -163,4 +163,3 @@ export const navigatePage = defineTool({
     response.setIncludePages(true);
   },
 });
-

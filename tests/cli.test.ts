@@ -177,5 +177,4 @@ describe('cli args parsing', () => {
       'X-Custom': 'value',
     });
   });
-
 });

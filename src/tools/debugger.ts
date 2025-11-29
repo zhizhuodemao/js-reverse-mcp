@@ -58,7 +58,8 @@ export const listScripts = defineTool({
 
     // Filter out scripts without URLs (inline/eval scripts) unless they're the only ones
     const scriptsWithUrls = scripts.filter(s => s.url);
-    const displayScripts = scriptsWithUrls.length > 0 ? scriptsWithUrls : scripts;
+    const displayScripts =
+      scriptsWithUrls.length > 0 ? scriptsWithUrls : scripts;
 
     if (displayScripts.length === 0) {
       response.appendResponseLine('No scripts found.');
@@ -93,7 +94,9 @@ export const getScriptSource = defineTool({
   schema: {
     scriptId: zod
       .string()
-      .describe('The script ID (from list_scripts) to get the source code for.'),
+      .describe(
+        'The script ID (from list_scripts) to get the source code for.',
+      ),
     startLine: zod
       .number()
       .int()
@@ -181,9 +184,7 @@ export const getScriptSource = defineTool({
         response.appendResponseLine(
           `Script ${scriptId} is large (${source.length} chars). Use offset/length or startLine/endLine to read portions.`,
         );
-        response.appendResponseLine(
-          `First 1000 characters:\n`,
-        );
+        response.appendResponseLine(`First 1000 characters:\n`);
         response.appendResponseLine('```javascript');
         response.appendResponseLine(source.substring(0, 1000) + '...');
         response.appendResponseLine('```');
@@ -316,7 +317,9 @@ export const findInScript = defineTool({
 
       response.appendResponseLine(`Found "${query}" in script ${scriptId}:`);
       response.appendResponseLine(`URL: ${url}`);
-      response.appendResponseLine(`Position: line ${lineNumber + 1}, column ${columnNumber}`);
+      response.appendResponseLine(
+        `Position: line ${lineNumber + 1}, column ${columnNumber}`,
+      );
       response.appendResponseLine(`Character offset: ${position}`);
       response.appendResponseLine('');
       response.appendResponseLine('Context:');
@@ -477,9 +480,7 @@ export const searchInSources = defineTool({
         let preview = match.lineContent.trim();
         if (maxLineLength > 0 && preview.length > maxLineLength) {
           // Try to find the query position to center the preview
-          const lowerContent = caseSensitive
-            ? preview
-            : preview.toLowerCase();
+          const lowerContent = caseSensitive ? preview : preview.toLowerCase();
           const lowerQuery = caseSensitive ? query : query.toLowerCase();
           const matchPos = isRegex ? 0 : lowerContent.indexOf(lowerQuery);
 
@@ -601,7 +602,9 @@ export const setBreakpoint = defineTool({
         response.appendResponseLine(`- Condition: ${condition}`);
       }
       if (breakpointInfo.locations.length > 0) {
-        response.appendResponseLine(`- Resolved to ${breakpointInfo.locations.length} location(s)`);
+        response.appendResponseLine(
+          `- Resolved to ${breakpointInfo.locations.length} location(s)`,
+        );
       }
     } catch (error) {
       response.appendResponseLine(
@@ -626,7 +629,9 @@ export const removeBreakpoint = defineTool({
   schema: {
     breakpointId: zod
       .string()
-      .describe('The breakpoint ID to remove (from list_breakpoints or set_breakpoint).'),
+      .describe(
+        'The breakpoint ID to remove (from list_breakpoints or set_breakpoint).',
+      ),
   },
   handler: async (request, response, context) => {
     const debugger_ = context.debuggerContext;
@@ -642,7 +647,9 @@ export const removeBreakpoint = defineTool({
 
     try {
       await debugger_.removeBreakpoint(breakpointId);
-      response.appendResponseLine(`Breakpoint ${breakpointId} removed successfully.`);
+      response.appendResponseLine(
+        `Breakpoint ${breakpointId} removed successfully.`,
+      );
     } catch (error) {
       response.appendResponseLine(
         `Error removing breakpoint: ${error instanceof Error ? error.message : String(error)}`,
@@ -680,12 +687,16 @@ export const listBreakpoints = defineTool({
       return;
     }
 
-    response.appendResponseLine(`Active breakpoints (${breakpoints.length}):\n`);
+    response.appendResponseLine(
+      `Active breakpoints (${breakpoints.length}):\n`,
+    );
 
     for (const bp of breakpoints) {
       response.appendResponseLine(`- ID: ${bp.breakpointId}`);
       response.appendResponseLine(`  URL: ${bp.url}`);
-      response.appendResponseLine(`  Line: ${bp.lineNumber + 1}, Column: ${bp.columnNumber}`);
+      response.appendResponseLine(
+        `  Line: ${bp.lineNumber + 1}, Column: ${bp.columnNumber}`,
+      );
       if (bp.condition) {
         response.appendResponseLine(`  Condition: ${bp.condition}`);
       }
@@ -734,7 +745,9 @@ export const getRequestInitiator = defineTool({
         return;
       }
 
-      response.appendResponseLine(`Request initiator for ${httpRequest.url()}:\n`);
+      response.appendResponseLine(
+        `Request initiator for ${httpRequest.url()}:\n`,
+      );
       response.appendResponseLine(`Type: ${initiator.type}`);
 
       if (initiator.url) {
@@ -755,11 +768,16 @@ export const getRequestInitiator = defineTool({
           const location = frame.url
             ? `${frame.url}:${frame.lineNumber + 1}:${frame.columnNumber + 1}`
             : `script ${frame.scriptId}:${frame.lineNumber + 1}:${frame.columnNumber + 1}`;
-          response.appendResponseLine(`  ${i + 1}. ${functionName} @ ${location}`);
+          response.appendResponseLine(
+            `  ${i + 1}. ${functionName} @ ${location}`,
+          );
         }
 
         // Include parent stack if available (for async calls)
-        if (initiator.stack.parent && initiator.stack.parent.callFrames.length > 0) {
+        if (
+          initiator.stack.parent &&
+          initiator.stack.parent.callFrames.length > 0
+        ) {
           response.appendResponseLine('\nAsync Parent Stack:');
           for (let i = 0; i < initiator.stack.parent.callFrames.length; i++) {
             const frame = initiator.stack.parent.callFrames[i];
@@ -767,7 +785,9 @@ export const getRequestInitiator = defineTool({
             const location = frame.url
               ? `${frame.url}:${frame.lineNumber + 1}:${frame.columnNumber + 1}`
               : `script ${frame.scriptId}:${frame.lineNumber + 1}:${frame.columnNumber + 1}`;
-            response.appendResponseLine(`  ${i + 1}. ${functionName} @ ${location}`);
+            response.appendResponseLine(
+              `  ${i + 1}. ${functionName} @ ${location}`,
+            );
           }
         }
       }
@@ -818,7 +838,9 @@ export const getPausedInfo = defineTool({
 
     if (!pausedState.isPaused) {
       response.appendResponseLine('Execution is not paused.');
-      response.appendResponseLine('Set a breakpoint and trigger it to pause execution.');
+      response.appendResponseLine(
+        'Set a breakpoint and trigger it to pause execution.',
+      );
       return;
     }
 
@@ -829,7 +851,9 @@ export const getPausedInfo = defineTool({
     }
 
     if (pausedState.hitBreakpoints && pausedState.hitBreakpoints.length > 0) {
-      response.appendResponseLine(`Hit breakpoints: ${pausedState.hitBreakpoints.join(', ')}`);
+      response.appendResponseLine(
+        `Hit breakpoints: ${pausedState.hitBreakpoints.join(', ')}`,
+      );
     }
 
     response.appendResponseLine('\n📍 Call Stack:');
@@ -837,9 +861,12 @@ export const getPausedInfo = defineTool({
     for (let i = 0; i < pausedState.callFrames.length; i++) {
       const frame = pausedState.callFrames[i];
       const script = debugger_.getScriptById(frame.location.scriptId);
-      const url = script?.url || frame.url || `script:${frame.location.scriptId}`;
+      const url =
+        script?.url || frame.url || `script:${frame.location.scriptId}`;
       const location = `${url}:${frame.location.lineNumber + 1}:${frame.location.columnNumber + 1}`;
-      response.appendResponseLine(`  ${i}. ${frame.functionName} @ ${location}`);
+      response.appendResponseLine(
+        `  ${i}. ${frame.functionName} @ ${location}`,
+      );
       response.appendResponseLine(`     CallFrameId: ${frame.callFrameId}`);
     }
 
@@ -860,19 +887,27 @@ export const getPausedInfo = defineTool({
 
         if (scope.object.objectId) {
           try {
-            const variables = await debugger_.getScopeVariables(scope.object.objectId);
+            const variables = await debugger_.getScopeVariables(
+              scope.object.objectId,
+            );
 
             if (variables.length === 0) {
               response.appendResponseLine('    (empty)');
             } else {
-              for (const variable of variables.slice(0, 20)) { // Limit to 20 variables
-                const valueStr = typeof variable.value === 'string'
-                  ? `"${variable.value}"`
-                  : JSON.stringify(variable.value);
-                response.appendResponseLine(`    ${variable.name}: ${valueStr}`);
+              for (const variable of variables.slice(0, 20)) {
+                // Limit to 20 variables
+                const valueStr =
+                  typeof variable.value === 'string'
+                    ? `"${variable.value}"`
+                    : JSON.stringify(variable.value);
+                response.appendResponseLine(
+                  `    ${variable.name}: ${valueStr}`,
+                );
               }
               if (variables.length > 20) {
-                response.appendResponseLine(`    ... and ${variables.length - 20} more`);
+                response.appendResponseLine(
+                  `    ... and ${variables.length - 20} more`,
+                );
               }
             }
           } catch {
@@ -882,7 +917,9 @@ export const getPausedInfo = defineTool({
       }
     }
 
-    response.appendResponseLine('\n💡 Use resume, step_over, step_into, or step_out to continue.');
+    response.appendResponseLine(
+      '\n💡 Use resume, step_over, step_into, or step_out to continue.',
+    );
   },
 });
 
@@ -955,7 +992,9 @@ export const pause = defineTool({
 
     try {
       await debugger_.pause();
-      response.appendResponseLine('⏸️ Pause requested. Waiting for execution to pause...');
+      response.appendResponseLine(
+        '⏸️ Pause requested. Waiting for execution to pause...',
+      );
     } catch (error) {
       response.appendResponseLine(
         `Error pausing: ${error instanceof Error ? error.message : String(error)}`,
@@ -994,7 +1033,9 @@ export const stepOver = defineTool({
 
     try {
       await debugger_.stepOver();
-      response.appendResponseLine('⏭️ Stepped over. Use get_paused_info to see current state.');
+      response.appendResponseLine(
+        '⏭️ Stepped over. Use get_paused_info to see current state.',
+      );
     } catch (error) {
       response.appendResponseLine(
         `Error stepping over: ${error instanceof Error ? error.message : String(error)}`,
@@ -1033,7 +1074,9 @@ export const stepInto = defineTool({
 
     try {
       await debugger_.stepInto();
-      response.appendResponseLine('⬇️ Stepped into. Use get_paused_info to see current state.');
+      response.appendResponseLine(
+        '⬇️ Stepped into. Use get_paused_info to see current state.',
+      );
     } catch (error) {
       response.appendResponseLine(
         `Error stepping into: ${error instanceof Error ? error.message : String(error)}`,
@@ -1072,7 +1115,9 @@ export const stepOut = defineTool({
 
     try {
       await debugger_.stepOut();
-      response.appendResponseLine('⬆️ Stepped out. Use get_paused_info to see current state.');
+      response.appendResponseLine(
+        '⬆️ Stepped out. Use get_paused_info to see current state.',
+      );
     } catch (error) {
       response.appendResponseLine(
         `Error stepping out: ${error instanceof Error ? error.message : String(error)}`,
@@ -1094,15 +1139,15 @@ export const evaluateOnCallframe = defineTool({
     readOnlyHint: true,
   },
   schema: {
-    expression: zod
-      .string()
-      .describe('The JavaScript expression to evaluate.'),
+    expression: zod.string().describe('The JavaScript expression to evaluate.'),
     frameIndex: zod
       .number()
       .int()
       .optional()
       .default(0)
-      .describe('The call frame index to evaluate in (0 = top frame, default: 0).'),
+      .describe(
+        'The call frame index to evaluate in (0 = top frame, default: 0).',
+      ),
   },
   handler: async (request, response, context) => {
     const debugger_ = context.debuggerContext;
@@ -1133,25 +1178,36 @@ export const evaluateOnCallframe = defineTool({
     const callFrameId = pausedState.callFrames[frameIndex].callFrameId;
 
     try {
-      const result = await debugger_.evaluateOnCallFrame(callFrameId, expression, {
-        returnByValue: true,
-        generatePreview: true,
-      });
+      const result = await debugger_.evaluateOnCallFrame(
+        callFrameId,
+        expression,
+        {
+          returnByValue: true,
+          generatePreview: true,
+        },
+      );
 
       if (result.exceptionDetails) {
-        response.appendResponseLine(`❌ Error: ${result.exceptionDetails.text}`);
+        response.appendResponseLine(
+          `❌ Error: ${result.exceptionDetails.text}`,
+        );
         if (result.exceptionDetails.exception) {
-          response.appendResponseLine(`   ${result.exceptionDetails.exception.description || ''}`);
+          response.appendResponseLine(
+            `   ${result.exceptionDetails.exception.description || ''}`,
+          );
         }
       } else {
         response.appendResponseLine(`📝 Result:`);
         if (result.result.value !== undefined) {
-          const valueStr = typeof result.result.value === 'string'
-            ? `"${result.result.value}"`
-            : JSON.stringify(result.result.value, null, 2);
+          const valueStr =
+            typeof result.result.value === 'string'
+              ? `"${result.result.value}"`
+              : JSON.stringify(result.result.value, null, 2);
           response.appendResponseLine(valueStr);
         } else {
-          response.appendResponseLine(result.result.description || `[${result.result.type}]`);
+          response.appendResponseLine(
+            result.result.description || `[${result.result.type}]`,
+          );
         }
       }
     } catch (error) {
@@ -1220,7 +1276,9 @@ export const setBreakpointOnText = defineTool({
       });
 
       if (searchResult.matches.length === 0) {
-        response.appendResponseLine(`"${text}" not found in any loaded script.`);
+        response.appendResponseLine(
+          `"${text}" not found in any loaded script.`,
+        );
         return;
       }
 
@@ -1283,7 +1341,9 @@ export const setBreakpointOnText = defineTool({
       response.appendResponseLine(`✅ Breakpoint set successfully!`);
       response.appendResponseLine(`- ID: ${breakpointInfo.breakpointId}`);
       response.appendResponseLine(`- URL: ${url}`);
-      response.appendResponseLine(`- Line: ${match.lineNumber + 1}, Column: ${columnNumber}`);
+      response.appendResponseLine(
+        `- Line: ${match.lineNumber + 1}, Column: ${columnNumber}`,
+      );
       if (condition) {
         response.appendResponseLine(`- Condition: ${condition}`);
       }
@@ -1294,7 +1354,10 @@ export const setBreakpointOnText = defineTool({
         lines[match.lineNumber].length,
         columnNumber + text.length + 50,
       );
-      const preview = lines[match.lineNumber].substring(contextStart, contextEnd);
+      const preview = lines[match.lineNumber].substring(
+        contextStart,
+        contextEnd,
+      );
       const prefix = contextStart > 0 ? '...' : '';
       const suffix = contextEnd < lines[match.lineNumber].length ? '...' : '';
 
@@ -1478,7 +1541,9 @@ export const hookFunction = defineTool({
           response.appendResponseLine(
             'Function calls will be logged to console. Use list_console_messages to view.',
           );
-          response.appendResponseLine(`Use unhook_function(hookId: "${id}") to remove.`);
+          response.appendResponseLine(
+            `Use unhook_function(hookId: "${id}") to remove.`,
+          );
         } else {
           response.appendResponseLine(
             `❌ ${(result as {message: string}).message}`,
@@ -1533,7 +1598,9 @@ export const unhookFunction = defineTool({
 
       if (result && typeof result === 'object') {
         if ((result as {success: boolean}).success) {
-          response.appendResponseLine(`✅ Hook "${hookId}" removed successfully.`);
+          response.appendResponseLine(
+            `✅ Hook "${hookId}" removed successfully.`,
+          );
         } else {
           response.appendResponseLine(
             `❌ ${(result as {message: string}).message}`,
@@ -1834,7 +1901,9 @@ export const getStorage = defineTool({
       const page = context.getSelectedPage();
       const result = await page.evaluate(storageCode);
 
-      response.appendResponseLine(`Storage data${filter ? ` (filter: "${filter}")` : ''}:\n`);
+      response.appendResponseLine(
+        `Storage data${filter ? ` (filter: "${filter}")` : ''}:\n`,
+      );
       response.appendResponseLine('```json');
       response.appendResponseLine(JSON.stringify(result, null, 2));
       response.appendResponseLine('```');
@@ -1859,9 +1928,7 @@ export const breakOnXhr = defineTool({
     readOnlyHint: false,
   },
   schema: {
-    url: zod
-      .string()
-      .describe('URL pattern to break on (partial match).'),
+    url: zod.string().describe('URL pattern to break on (partial match).'),
   },
   handler: async (request, response, context) => {
     const debugger_ = context.debuggerContext;
@@ -1883,7 +1950,9 @@ export const breakOnXhr = defineTool({
 
     try {
       await client.send('DOMDebugger.setXHRBreakpoint', {url});
-      response.appendResponseLine(`✅ XHR breakpoint set for URLs containing: "${url}"`);
+      response.appendResponseLine(
+        `✅ XHR breakpoint set for URLs containing: "${url}"`,
+      );
       response.appendResponseLine(
         'Debugger will pause when a matching XHR/Fetch request is made.',
       );
@@ -1907,9 +1976,7 @@ export const removeXhrBreakpoint = defineTool({
     readOnlyHint: false,
   },
   schema: {
-    url: zod
-      .string()
-      .describe('The URL pattern to remove breakpoint for.'),
+    url: zod.string().describe('The URL pattern to remove breakpoint for.'),
   },
   handler: async (request, response, context) => {
     const debugger_ = context.debuggerContext;
@@ -2281,7 +2348,7 @@ export const traceFunction = defineTool({
       }
 
       // Build the logging expression
-      let logParts = [`'[Trace ${id}] ${functionName} called'`];
+      const logParts = [`'[Trace ${id}] ${functionName} called'`];
       if (logArgs) {
         logParts.push(`'args:'`);
         logParts.push(`JSON.stringify(Array.from(arguments)).slice(0,500)`);
@@ -2345,4 +2412,3 @@ export const traceFunction = defineTool({
     }
   },
 });
-

@@ -40,4 +40,3 @@ in the DevTools Elements panel (if any).`,
     });
   },
 });
-

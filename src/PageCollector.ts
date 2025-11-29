@@ -31,7 +31,6 @@ import {
   type HTTPRequest,
   type Page,
   type PageEvents as PuppeteerPageEvents,
-  CDPSessionEvent,
 } from './third_party/index.js';
 
 /**
@@ -39,7 +38,13 @@ import {
  * Contains the call stack when the request was initiated.
  */
 export interface RequestInitiator {
-  type: 'parser' | 'script' | 'preload' | 'SignedExchange' | 'preflight' | 'other';
+  type:
+    | 'parser'
+    | 'script'
+    | 'preload'
+    | 'SignedExchange'
+    | 'preflight'
+    | 'other';
   url?: string;
   lineNumber?: number;
   columnNumber?: number;
@@ -389,7 +394,10 @@ class PageIssueSubscriber {
 
 export class NetworkCollector extends PageCollector<HTTPRequest> {
   #initiators = new WeakMap<Page, Map<string, RequestInitiator>>();
-  #cdpListeners = new WeakMap<Page, (event: Protocol.Network.RequestWillBeSentEvent) => void>();
+  #cdpListeners = new WeakMap<
+    Page,
+    (event: Protocol.Network.RequestWillBeSentEvent) => void
+  >();
 
   constructor(
     browser: Browser,
@@ -421,7 +429,9 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
     this.#initiators.set(page, initiatorMap);
 
     // Listen to CDP events for initiator info
-    const onRequestWillBeSent = (event: Protocol.Network.RequestWillBeSentEvent): void => {
+    const onRequestWillBeSent = (
+      event: Protocol.Network.RequestWillBeSentEvent,
+    ): void => {
       if (event.initiator) {
         initiatorMap.set(event.requestId, event.initiator as RequestInitiator);
       }
@@ -470,7 +480,10 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
   /**
    * Get initiator by CDP request ID.
    */
-  getInitiatorByRequestId(page: Page, requestId: string): RequestInitiator | undefined {
+  getInitiatorByRequestId(
+    page: Page,
+    requestId: string,
+  ): RequestInitiator | undefined {
     const initiatorMap = this.#initiators.get(page);
     return initiatorMap?.get(requestId);
   }

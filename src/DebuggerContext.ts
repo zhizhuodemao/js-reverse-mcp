@@ -56,7 +56,17 @@ export interface CallFrame {
 }
 
 export interface ScopeInfo {
-  type: 'global' | 'local' | 'with' | 'closure' | 'catch' | 'block' | 'script' | 'eval' | 'module' | 'wasm-expression-stack';
+  type:
+    | 'global'
+    | 'local'
+    | 'with'
+    | 'closure'
+    | 'catch'
+    | 'block'
+    | 'script'
+    | 'eval'
+    | 'module'
+    | 'wasm-expression-stack';
   object: RemoteObject;
   name?: string;
   startLocation?: {
@@ -109,9 +119,9 @@ export interface EvaluateResult {
  */
 export class DebuggerContext {
   #client: CDPSession | null = null;
-  #scripts: Map<string, ScriptInfo> = new Map(); // scriptId -> info
-  #urlToScripts: Map<string, string[]> = new Map(); // url -> scriptId[]
-  #breakpoints: Map<string, BreakpointInfo> = new Map(); // breakpointId -> info
+  #scripts = new Map<string, ScriptInfo>(); // scriptId -> info
+  #urlToScripts = new Map<string, string[]>(); // url -> scriptId[]
+  #breakpoints = new Map<string, BreakpointInfo>(); // breakpointId -> info
   #enabled = false;
   #pausedState: PausedState = {isPaused: false, callFrames: []};
 
@@ -232,16 +242,20 @@ export class DebuggerContext {
           objectId: scope.object.objectId,
         },
         name: scope.name,
-        startLocation: scope.startLocation ? {
-          scriptId: scope.startLocation.scriptId,
-          lineNumber: scope.startLocation.lineNumber,
-          columnNumber: scope.startLocation.columnNumber ?? 0,
-        } : undefined,
-        endLocation: scope.endLocation ? {
-          scriptId: scope.endLocation.scriptId,
-          lineNumber: scope.endLocation.lineNumber,
-          columnNumber: scope.endLocation.columnNumber ?? 0,
-        } : undefined,
+        startLocation: scope.startLocation
+          ? {
+              scriptId: scope.startLocation.scriptId,
+              lineNumber: scope.startLocation.lineNumber,
+              columnNumber: scope.startLocation.columnNumber ?? 0,
+            }
+          : undefined,
+        endLocation: scope.endLocation
+          ? {
+              scriptId: scope.endLocation.scriptId,
+              lineNumber: scope.endLocation.lineNumber,
+              columnNumber: scope.endLocation.columnNumber ?? 0,
+            }
+          : undefined,
       })),
       this: {
         type: frame.this.type,
@@ -417,14 +431,18 @@ export class DebuggerContext {
         description: result.result.description,
         objectId: result.result.objectId,
       },
-      exceptionDetails: result.exceptionDetails ? {
-        text: result.exceptionDetails.text,
-        exception: result.exceptionDetails.exception ? {
-          type: result.exceptionDetails.exception.type,
-          value: result.exceptionDetails.exception.value,
-          description: result.exceptionDetails.exception.description,
-        } : undefined,
-      } : undefined,
+      exceptionDetails: result.exceptionDetails
+        ? {
+            text: result.exceptionDetails.text,
+            exception: result.exceptionDetails.exception
+              ? {
+                  type: result.exceptionDetails.exception.type,
+                  value: result.exceptionDetails.exception.value,
+                  description: result.exceptionDetails.exception.description,
+                }
+              : undefined,
+          }
+        : undefined,
     };
   }
 

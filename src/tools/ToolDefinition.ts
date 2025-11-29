@@ -8,7 +8,12 @@ import type {DebuggerContext} from '../DebuggerContext.js';
 import type {TextSnapshotNode} from '../McpContext.js';
 import type {RequestInitiator} from '../PageCollector.js';
 import {zod} from '../third_party/index.js';
-import type {Dialog, ElementHandle, HTTPRequest, Page} from '../third_party/index.js';
+import type {
+  Dialog,
+  ElementHandle,
+  HTTPRequest,
+  Page,
+} from '../third_party/index.js';
 import type {TraceResult} from '../trace-processing/parse.js';
 import type {PaginationOptions} from '../utils/types.js';
 

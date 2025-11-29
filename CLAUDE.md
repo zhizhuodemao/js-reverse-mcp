@@ -70,6 +70,7 @@ This is an MCP (Model Context Protocol) server that exposes Chrome DevTools func
 ### Tool System
 
 Tools are defined in `src/tools/` using the `defineTool()` helper from `src/tools/ToolDefinition.ts`. Each tool has:
+
 - `name`: Tool identifier
 - `description`: For MCP clients
 - `annotations`: Category and read-only hint
