@@ -9,6 +9,9 @@ import {zod} from '../third_party/index.js';
 import {ToolCategory} from './categories.js';
 import {defineTool, timeoutSchema} from './ToolDefinition.js';
 
+// Default navigation timeout in milliseconds (10 seconds)
+const DEFAULT_NAV_TIMEOUT = 10000;
+
 export const listPages = defineTool({
   name: 'list_pages',
   description: `Get a list of pages open in the browser.`,
@@ -60,7 +63,7 @@ export const newPage = defineTool({
 
     await context.waitForEventsAfterAction(async () => {
       await page.goto(request.params.url, {
-        timeout: request.params.timeout,
+        timeout: request.params.timeout ?? DEFAULT_NAV_TIMEOUT,
         waitUntil: 'domcontentloaded',
       });
     });
@@ -93,7 +96,7 @@ export const navigatePage = defineTool({
   handler: async (request, response, context) => {
     const page = context.getSelectedPage();
     const options = {
-      timeout: request.params.timeout,
+      timeout: request.params.timeout ?? DEFAULT_NAV_TIMEOUT,
     };
 
     if (!request.params.type && !request.params.url) {
