@@ -61,6 +61,7 @@ export const newPage = defineTool({
     await context.waitForEventsAfterAction(async () => {
       await page.goto(request.params.url, {
         timeout: request.params.timeout,
+        waitUntil: 'domcontentloaded',
       });
     });
 
@@ -110,7 +111,10 @@ export const navigatePage = defineTool({
             throw new Error('A URL is required for navigation of type=url.');
           }
           try {
-            await page.goto(request.params.url, options);
+            await page.goto(request.params.url, {
+              ...options,
+              waitUntil: 'domcontentloaded',
+            });
             response.appendResponseLine(
               `Successfully navigated to ${request.params.url}.`,
             );
@@ -122,7 +126,10 @@ export const navigatePage = defineTool({
           break;
         case 'back':
           try {
-            await page.goBack(options);
+            await page.goBack({
+              ...options,
+              waitUntil: 'domcontentloaded',
+            });
             response.appendResponseLine(
               `Successfully navigated back to ${page.url()}.`,
             );
@@ -134,7 +141,10 @@ export const navigatePage = defineTool({
           break;
         case 'forward':
           try {
-            await page.goForward(options);
+            await page.goForward({
+              ...options,
+              waitUntil: 'domcontentloaded',
+            });
             response.appendResponseLine(
               `Successfully navigated forward to ${page.url()}.`,
             );
