@@ -49,7 +49,7 @@ export const selectPage = defineTool({
 
 export const newPage = defineTool({
   name: 'new_page',
-  description: `Creates a new page`,
+  description: `Creates a new page and navigates to the specified URL. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds.`,
   annotations: {
     category: ToolCategory.NAVIGATION,
     readOnlyHint: false,
@@ -74,7 +74,7 @@ export const newPage = defineTool({
 
 export const navigatePage = defineTool({
   name: 'navigate_page',
-  description: `Navigates the currently selected page to a URL.`,
+  description: `Navigates the currently selected page to a URL, or performs back/forward/reload navigation. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds.`,
   annotations: {
     category: ToolCategory.NAVIGATION,
     readOnlyHint: false,
