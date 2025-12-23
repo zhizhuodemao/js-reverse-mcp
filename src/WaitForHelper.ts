@@ -131,6 +131,7 @@ export class WaitForHelper {
         if (navigationStated) {
           return this.#page.waitForNavigation({
             timeout: this.#navigationTimeout,
+            waitUntil: 'domcontentloaded',
             signal: this.#abortController.signal,
           });
         }
