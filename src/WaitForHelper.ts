@@ -126,36 +126,55 @@ export class WaitForHelper {
   async waitForEventsAfterAction(
     action: () => Promise<unknown>,
   ): Promise<void> {
-    const navigationFinished = this.waitForNavigationStarted()
-      .then(navigationStated => {
-        if (navigationStated) {
-          return this.#page.waitForNavigation({
-            timeout: this.#navigationTimeout,
-            waitUntil: 'domcontentloaded',
-            signal: this.#abortController.signal,
-          });
-        }
-        return;
-      })
-      .catch(error => logger(error));
+    // Overall timeout to prevent infinite hanging (15 seconds max)
+    const overallTimeout = new Promise<void>((_, reject) => {
+      const id = setTimeout(() => {
+        reject(new Error('Overall navigation timeout'));
+      }, 15000);
+      this.#abortController.signal.addEventListener('abort', () => {
+        clearTimeout(id);
+      });
+    });
+
+    const doAction = async () => {
+      const navigationFinished = this.waitForNavigationStarted()
+        .then(navigationStated => {
+          if (navigationStated) {
+            return this.#page.waitForNavigation({
+              timeout: this.#navigationTimeout,
+              waitUntil: 'domcontentloaded',
+              signal: this.#abortController.signal,
+            });
+          }
+          return;
+        })
+        .catch(error => logger(error));
+
+      try {
+        await action();
+      } catch (error) {
+        // Clear up pending promises
+        this.#abortController.abort();
+        throw error;
+      }
+
+      try {
+        await navigationFinished;
+
+        // Wait for stable dom after navigation so we execute in
+        // the correct context
+        await this.waitForStableDom();
+      } catch (error) {
+        logger(error);
+      } finally {
+        this.#abortController.abort();
+      }
+    };
 
     try {
-      await action();
-    } catch (error) {
-      // Clear up pending promises
-      this.#abortController.abort();
-      throw error;
-    }
-
-    try {
-      await navigationFinished;
-
-      // Wait for stable dom after navigation so we execute in
-      // the correct context
-      await this.waitForStableDom();
+      await Promise.race([doAction(), overallTimeout]);
     } catch (error) {
       logger(error);
-    } finally {
       this.#abortController.abort();
     }
   }
