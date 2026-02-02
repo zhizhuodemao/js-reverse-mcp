@@ -30,6 +30,7 @@ import * as screenshotTools from './tools/screenshot.js';
 import * as scriptTools from './tools/script.js';
 import * as snapshotTools from './tools/snapshot.js';
 import type {ToolDefinition} from './tools/ToolDefinition.js';
+import * as websocketTools from './tools/websocket.js';
 
 // If moved update release-please config
 // x-release-please-start-version
@@ -165,6 +166,7 @@ const tools = [
   ...Object.values(screenshotTools),
   ...Object.values(scriptTools),
   ...Object.values(snapshotTools),
+  ...Object.values(websocketTools),
 ] as ToolDefinition[];
 
 tools.sort((a, b) => {

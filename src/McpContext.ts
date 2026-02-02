@@ -12,8 +12,9 @@ import {type AggregatedIssue} from '../node_modules/chrome-devtools-frontend/mcp
 
 import {DebuggerContext} from './DebuggerContext.js';
 import {extractUrlLikeFromDevToolsTitle, urlsEqual} from './DevtoolsUtils.js';
-import type {ListenerMap, RequestInitiator} from './PageCollector.js';
+import type {TrafficSummary} from './formatters/websocketFormatter.js';
 import {NetworkCollector, ConsoleCollector} from './PageCollector.js';
+import type {ListenerMap, RequestInitiator} from './PageCollector.js';
 import {Locator} from './third_party/index.js';
 import type {
   Browser,
@@ -32,6 +33,8 @@ import {CLOSE_PAGE_ERROR} from './tools/ToolDefinition.js';
 import type {Context, DevToolsData} from './tools/ToolDefinition.js';
 import type {TraceResult} from './trace-processing/parse.js';
 import {WaitForHelper} from './WaitForHelper.js';
+import type {WebSocketData} from './WebSocketCollector.js';
+import {WebSocketCollector} from './WebSocketCollector.js';
 
 export interface TextSnapshotNode extends SerializedAXNode {
   id: string;
@@ -101,6 +104,7 @@ export class McpContext implements Context {
   #textSnapshot: TextSnapshot | null = null;
   #networkCollector: NetworkCollector;
   #consoleCollector: ConsoleCollector;
+  #webSocketCollector: WebSocketCollector;
 
   #isRunningTrace = false;
   #networkConditionsMap = new WeakMap<Page, string>();
@@ -110,6 +114,7 @@ export class McpContext implements Context {
 
   #nextSnapshotId = 1;
   #traceResults: TraceResult[] = [];
+  #trafficSummaryCache = new Map<number, TrafficSummary>();
 
   #locatorClass: typeof Locator;
   #options: McpContextOptions;
@@ -154,12 +159,18 @@ export class McpContext implements Context {
       },
       this.#options.experimentalIncludeAllPages,
     );
+
+    this.#webSocketCollector = new WebSocketCollector(
+      this.browser,
+      this.#options.experimentalIncludeAllPages,
+    );
   }
 
   async #init() {
     await this.createPagesSnapshot();
     await this.#networkCollector.init();
     await this.#consoleCollector.init();
+    await this.#webSocketCollector.init();
     await this.#initDebugger();
   }
 
@@ -180,6 +191,7 @@ export class McpContext implements Context {
   dispose() {
     this.#networkCollector.dispose();
     this.#consoleCollector.dispose();
+    this.#webSocketCollector.dispose();
     void this.#debuggerContext.disable();
   }
 
@@ -279,6 +291,7 @@ export class McpContext implements Context {
     this.selectPage(page);
     this.#networkCollector.addPage(page);
     this.#consoleCollector.addPage(page);
+    this.#webSocketCollector.addPage(page);
     return page;
   }
   async closePage(pageIdx: number): Promise<void> {
@@ -673,6 +686,43 @@ export class McpContext implements Context {
     const page = this.getSelectedPage();
     const request = this.#networkCollector.getById(page, requestId);
     return this.#networkCollector.getInitiator(page, request);
+  }
+
+  /**
+   * Get all WebSocket connections for the selected page.
+   */
+  getWebSocketConnections(includePreservedData?: boolean): WebSocketData[] {
+    const page = this.getSelectedPage();
+    return this.#webSocketCollector.getData(page, includePreservedData);
+  }
+
+  /**
+   * Get a WebSocket connection by stable ID.
+   */
+  getWebSocketById(wsid: number): WebSocketData {
+    const page = this.getSelectedPage();
+    return this.#webSocketCollector.getById(page, wsid);
+  }
+
+  /**
+   * Get stable ID for a WebSocket connection.
+   */
+  getWebSocketStableId(ws: WebSocketData): number {
+    return this.#webSocketCollector.getIdForResource(ws);
+  }
+
+  /**
+   * Cache traffic summary for a WebSocket connection.
+   */
+  cacheTrafficSummary(wsid: number, summary: TrafficSummary): void {
+    this.#trafficSummaryCache.set(wsid, summary);
+  }
+
+  /**
+   * Get cached traffic summary for a WebSocket connection.
+   */
+  getCachedTrafficSummary(wsid: number): TrafficSummary | undefined {
+    return this.#trafficSummaryCache.get(wsid);
   }
 
   waitForTextOnPage({

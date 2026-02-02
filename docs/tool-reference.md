@@ -7,9 +7,13 @@
   - [`navigate_page`](#navigate_page)
   - [`new_page`](#new_page)
   - [`select_page`](#select_page)
-- **[Network](#network)** (2 tools)
+- **[Network](#network)** (6 tools)
+  - [`analyze_websocket_messages`](#analyze_websocket_messages)
   - [`get_network_request`](#get_network_request)
+  - [`get_websocket_message`](#get_websocket_message)
+  - [`get_websocket_messages`](#get_websocket_messages)
   - [`list_network_requests`](#list_network_requests)
+  - [`list_websocket_connections`](#list_websocket_connections)
 - **[Debugging](#debugging)** (5 tools)
   - [`evaluate_script`](#evaluate_script)
   - [`get_console_message`](#get_console_message)
@@ -56,7 +60,7 @@
 
 ### `navigate_page`
 
-**Description:** Navigates the currently selected page to a URL.
+**Description:** Navigates the currently selected page to a URL, or performs back/forward/reload navigation. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds.
 
 **Parameters:**
 
@@ -69,7 +73,7 @@
 
 ### `new_page`
 
-**Description:** Creates a new page
+**Description:** Creates a new page and navigates to the specified URL. Waits for DOMContentLoaded event (not full page load). Default timeout is 10 seconds.
 
 **Parameters:**
 
@@ -90,6 +94,17 @@
 
 ## Network
 
+### `analyze_websocket_messages`
+
+**Description:** Analyzes WebSocket messages and groups them by pattern/fingerprint. Essential for understanding binary/protobuf message types in live streaming scenarios. Returns statistics and sample indices for each message type.
+
+**Parameters:**
+
+- **direction** (enum: "sent", "received") _(optional)_: Only analyze messages in this direction.
+- **wsid** (number) **(required)**: The wsid of the WebSocket connection to analyze.
+
+---
+
 ### `get_network_request`
 
 **Description:** Gets a network request by an optional reqid, if omitted returns the currently selected request in the DevTools Network panel.
@@ -97,6 +112,32 @@
 **Parameters:**
 
 - **reqid** (number) _(optional)_: The reqid of the network request. If omitted returns the currently selected request in the DevTools Network panel.
+
+---
+
+### `get_websocket_message`
+
+**Description:** Gets a single WebSocket message by its frame index. Use [`get_websocket_messages`](#get_websocket_messages) or [`analyze_websocket_messages`](#analyze_websocket_messages) first to find the frame index.
+
+**Parameters:**
+
+- **frameIndex** (integer) **(required)**: The frame index (0-based) to retrieve.
+- **wsid** (number) **(required)**: The wsid of the WebSocket connection.
+
+---
+
+### `get_websocket_messages`
+
+**Description:** Gets messages for a WebSocket connection. IMPORTANT: For binary/protobuf messages (like live streaming), use [`analyze_websocket_messages`](#analyze_websocket_messages) FIRST to understand message types, then use groupId parameter to filter specific types. Default mode shows summary only.
+
+**Parameters:**
+
+- **direction** (enum: "sent", "received") _(optional)_: Filter by direction: "sent" or "received".
+- **groupId** (string) _(optional)_: Filter by group ID (A, B, C, ...). Get group IDs from [`analyze_websocket_messages`](#analyze_websocket_messages) first.
+- **pageIdx** (integer) _(optional)_: Page number (0-based).
+- **pageSize** (integer) _(optional)_: Messages per page. Defaults to 10.
+- **show_content** (boolean) _(optional)_: Set to true to show full message payload. Default false (summary only) to avoid large binary output.
+- **wsid** (number) **(required)**: The wsid of the WebSocket connection.
 
 ---
 
@@ -110,6 +151,19 @@
 - **pageIdx** (integer) _(optional)_: Page number to return (0-based). When omitted, returns the first page.
 - **pageSize** (integer) _(optional)_: Maximum number of requests to return. When omitted, returns all requests.
 - **resourceTypes** (array) _(optional)_: Filter requests to only return requests of the specified resource types. When omitted or empty, returns all requests.
+
+---
+
+### `list_websocket_connections`
+
+**Description:** List all WebSocket connections. After getting wsid, use [`analyze_websocket_messages`](#analyze_websocket_messages)(wsid) FIRST to understand message patterns before viewing individual messages.
+
+**Parameters:**
+
+- **includePreservedConnections** (boolean) _(optional)_: Set to true to return the preserved connections over the last 3 navigations.
+- **pageIdx** (integer) _(optional)_: Page number to return (0-based). When omitted, returns the first page.
+- **pageSize** (integer) _(optional)_: Maximum number of connections to return. When omitted, returns all connections.
+- **urlFilter** (string) _(optional)_: Filter connections by URL. Only connections containing this substring will be returned.
 
 ---
 

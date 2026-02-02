@@ -5,6 +5,7 @@
  */
 
 import type {DebuggerContext} from '../DebuggerContext.js';
+import type {TrafficSummary} from '../formatters/websocketFormatter.js';
 import type {TextSnapshotNode} from '../McpContext.js';
 import type {RequestInitiator} from '../PageCollector.js';
 import {zod} from '../third_party/index.js';
@@ -16,6 +17,7 @@ import type {
 } from '../third_party/index.js';
 import type {TraceResult} from '../trace-processing/parse.js';
 import type {PaginationOptions} from '../utils/types.js';
+import type {WebSocketData} from '../WebSocketCollector.js';
 
 import type {ToolCategory} from './categories.js';
 
@@ -83,6 +85,15 @@ export interface Response {
   attachConsoleMessage(msgid: number): void;
   // Allows re-using DevTools data queried by some tools.
   attachDevToolsData(data: DevToolsData): void;
+  // WebSocket methods
+  setIncludeWebSocketConnections(
+    value: boolean,
+    options?: PaginationOptions & {
+      urlFilter?: string;
+      includePreservedConnections?: boolean;
+    },
+  ): void;
+  attachWebSocket(wsid: number): void;
 }
 
 /**
@@ -143,6 +154,26 @@ export type Context = Readonly<{
    * Get network request by ID.
    */
   getNetworkRequestById(reqid: number): HTTPRequest;
+  /**
+   * Get all WebSocket connections for the selected page.
+   */
+  getWebSocketConnections(includePreservedData?: boolean): WebSocketData[];
+  /**
+   * Get a WebSocket connection by stable ID.
+   */
+  getWebSocketById(wsid: number): WebSocketData;
+  /**
+   * Get stable ID for a WebSocket connection.
+   */
+  getWebSocketStableId(ws: WebSocketData): number;
+  /**
+   * Cache traffic summary for a WebSocket connection.
+   */
+  cacheTrafficSummary(wsid: number, summary: TrafficSummary): void;
+  /**
+   * Get cached traffic summary for a WebSocket connection.
+   */
+  getCachedTrafficSummary(wsid: number): TrafficSummary | undefined;
 }>;
 
 export function defineTool<Schema extends zod.ZodRawShape>(

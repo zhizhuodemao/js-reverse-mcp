@@ -20,6 +20,10 @@ import {
   getStatusFromRequest,
 } from './formatters/networkFormatter.js';
 import {formatSnapshotNode} from './formatters/snapshotFormatter.js';
+import {
+  formatWebSocketConnectionShort,
+  formatWebSocketConnectionVerbose,
+} from './formatters/websocketFormatter.js';
 import type {McpContext} from './McpContext.js';
 import type {
   ConsoleMessage,
@@ -56,6 +60,13 @@ export class McpResponse implements Response {
     types?: string[];
     includePreservedMessages?: boolean;
   };
+  #webSocketOptions?: {
+    include: boolean;
+    pagination?: PaginationOptions;
+    urlFilter?: string;
+    includePreservedConnections?: boolean;
+  };
+  #attachedWebSocketId?: number;
   #devToolsData?: DevToolsData;
 
   attachDevToolsData(data: DevToolsData): void {
@@ -134,6 +145,36 @@ export class McpResponse implements Response {
     this.#attachedConsoleMessageId = msgid;
   }
 
+  setIncludeWebSocketConnections(
+    value: boolean,
+    options?: PaginationOptions & {
+      urlFilter?: string;
+      includePreservedConnections?: boolean;
+    },
+  ): void {
+    if (!value) {
+      this.#webSocketOptions = undefined;
+      return;
+    }
+
+    this.#webSocketOptions = {
+      include: value,
+      pagination:
+        options?.pageSize || options?.pageIdx
+          ? {
+              pageSize: options.pageSize,
+              pageIdx: options.pageIdx,
+            }
+          : undefined,
+      urlFilter: options?.urlFilter,
+      includePreservedConnections: options?.includePreservedConnections,
+    };
+  }
+
+  attachWebSocket(wsid: number): void {
+    this.#attachedWebSocketId = wsid;
+  }
+
   get includePages(): boolean {
     return this.#includePages;
   }
@@ -145,8 +186,14 @@ export class McpResponse implements Response {
   get includeConsoleData(): boolean {
     return this.#consoleDataOptions?.include ?? false;
   }
+  get includeWebSocketConnections(): boolean {
+    return this.#webSocketOptions?.include ?? false;
+  }
   get attachedNetworkRequestId(): number | undefined {
     return this.#attachedNetworkRequestId;
+  }
+  get attachedWebSocketId(): number | undefined {
+    return this.#attachedWebSocketId;
   }
   get networkRequestsPageIdx(): number | undefined {
     return this.#networkRequestsOptions?.pagination?.pageIdx;
@@ -446,6 +493,53 @@ export class McpResponse implements Response {
       } else {
         response.push('<no console messages found>');
       }
+    }
+
+    // WebSocket connections list
+    if (this.#webSocketOptions?.include) {
+      let connections = context.getWebSocketConnections(
+        this.#webSocketOptions.includePreservedConnections,
+      );
+
+      // Apply URL filter if specified
+      if (this.#webSocketOptions.urlFilter) {
+        const filterPattern = this.#webSocketOptions.urlFilter.toLowerCase();
+        connections = connections.filter(ws =>
+          ws.connection.url.toLowerCase().includes(filterPattern),
+        );
+      }
+
+      response.push('## WebSocket connections');
+      if (connections.length) {
+        const paginatedData = this.#dataWithPagination(
+          connections,
+          this.#webSocketOptions.pagination,
+        );
+        response.push(...paginatedData.info);
+        for (const ws of paginatedData.items) {
+          response.push(
+            formatWebSocketConnectionShort(
+              ws,
+              context.getWebSocketStableId(ws),
+            ),
+          );
+        }
+        // 提示使用 analyze 工具
+        response.push(``);
+        response.push(
+          `> 提示: 使用 \`analyze_websocket_messages(wsid=N)\` 分析消息模式后再查看具体内容`,
+        );
+      } else {
+        response.push('<no WebSocket connections found>');
+      }
+    }
+
+    // Single WebSocket connection details
+    if (this.#attachedWebSocketId !== undefined) {
+      const ws = context.getWebSocketById(this.#attachedWebSocketId);
+      response.push(
+        ...formatWebSocketConnectionVerbose(ws, this.#attachedWebSocketId),
+      );
     }
 
     const text: TextContent = {
