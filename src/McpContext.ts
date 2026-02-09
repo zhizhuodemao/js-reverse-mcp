@@ -21,37 +21,17 @@ import type {
   ConsoleMessage,
   Debugger,
   Dialog,
-  ElementHandle,
   HTTPRequest,
   Page,
-  SerializedAXNode,
   PredefinedNetworkConditions,
 } from './third_party/index.js';
 import {listPages} from './tools/pages.js';
-import {takeSnapshot} from './tools/snapshot.js';
 import {CLOSE_PAGE_ERROR} from './tools/ToolDefinition.js';
 import type {Context, DevToolsData} from './tools/ToolDefinition.js';
 import type {TraceResult} from './trace-processing/parse.js';
 import {WaitForHelper} from './WaitForHelper.js';
 import type {WebSocketData} from './WebSocketCollector.js';
 import {WebSocketCollector} from './WebSocketCollector.js';
-
-export interface TextSnapshotNode extends SerializedAXNode {
-  id: string;
-  backendNodeId?: number;
-  children: TextSnapshotNode[];
-}
-
-export interface TextSnapshot {
-  root: TextSnapshotNode;
-  idToNode: Map<string, TextSnapshotNode>;
-  snapshotId: string;
-  selectedElementUid?: string;
-  // It might happen that there is a selected element, but it is not part of the
-  // snapshot. This flag indicates if there is any selected element.
-  hasSelectedElement: boolean;
-  verbose: boolean;
-}
 
 interface McpContextOptions {
   // Whether the DevTools windows are exposed as pages for debugging of DevTools.
@@ -100,8 +80,6 @@ export class McpContext implements Context {
   #pages: Page[] = [];
   #pageToDevToolsPage = new Map<Page, Page>();
   #selectedPage?: Page;
-  // The most recent snapshot.
-  #textSnapshot: TextSnapshot | null = null;
   #networkCollector: NetworkCollector;
   #consoleCollector: ConsoleCollector;
   #webSocketCollector: WebSocketCollector;
@@ -112,7 +90,6 @@ export class McpContext implements Context {
   #dialog?: Dialog;
   #debuggerContext: DebuggerContext = new DebuggerContext();
 
-  #nextSnapshotId = 1;
   #traceResults: TraceResult[] = [];
   #trafficSummaryCache = new Map<number, TrafficSummary>();
 
@@ -238,29 +215,6 @@ export class McpContext implements Context {
       return;
     }
     return this.#networkCollector.getIdForResource(request);
-  }
-
-  resolveCdpElementId(cdpBackendNodeId: number): string | undefined {
-    if (!cdpBackendNodeId) {
-      this.logger('no cdpBackendNodeId');
-      return;
-    }
-    if (this.#textSnapshot === null) {
-      this.logger('no text snapshot');
-      return;
-    }
-    // TODO: index by backendNodeId instead.
-    const queue = [this.#textSnapshot.root];
-    while (queue.length) {
-      const current = queue.pop()!;
-      if (current.backendNodeId === cdpBackendNodeId) {
-        return current.id;
-      }
-      for (const child of current.children) {
-        queue.push(child);
-      }
-    }
-    return;
   }
 
   getNetworkRequests(includePreservedRequests?: boolean): HTTPRequest[] {
@@ -410,35 +364,6 @@ export class McpContext implements Context {
     return page.getDefaultNavigationTimeout();
   }
 
-  getAXNodeByUid(uid: string) {
-    return this.#textSnapshot?.idToNode.get(uid);
-  }
-
-  async getElementByUid(uid: string): Promise<ElementHandle<Element>> {
-    if (!this.#textSnapshot?.idToNode.size) {
-      throw new Error(
-        `No snapshot found. Use ${takeSnapshot.name} to capture one.`,
-      );
-    }
-    const [snapshotId] = uid.split('_');
-
-    if (this.#textSnapshot.snapshotId !== snapshotId) {
-      throw new Error(
-        'This uid is coming from a stale snapshot. Call take_snapshot to get a fresh snapshot.',
-      );
-    }
-
-    const node = this.#textSnapshot?.idToNode.get(uid);
-    if (!node) {
-      throw new Error('No such element found in the snapshot');
-    }
-    const handle = await node.elementHandle();
-    if (!handle) {
-      throw new Error('No such element found in the snapshot');
-    }
-    return handle;
-  }
-
   /**
    * Creates a snapshot of the pages.
    */
@@ -537,70 +462,6 @@ export class McpContext implements Context {
       this.logger('error getting devtools data', err);
     }
     return {};
-  }
-
-  /**
-   * Creates a text snapshot of a page.
-   */
-  async createTextSnapshot(
-    verbose = false,
-    devtoolsData: DevToolsData | undefined = undefined,
-  ): Promise<void> {
-    const page = this.getSelectedPage();
-    const rootNode = await page.accessibility.snapshot({
-      includeIframes: true,
-      interestingOnly: !verbose,
-    });
-    if (!rootNode) {
-      return;
-    }
-
-    const snapshotId = this.#nextSnapshotId++;
-    // Iterate through the whole accessibility node tree and assign node ids that
-    // will be used for the tree serialization and mapping ids back to nodes.
-    let idCounter = 0;
-    const idToNode = new Map<string, TextSnapshotNode>();
-    const assignIds = (node: SerializedAXNode): TextSnapshotNode => {
-      const nodeWithId: TextSnapshotNode = {
-        ...node,
-        id: `${snapshotId}_${idCounter++}`,
-        children: node.children
-          ? node.children.map(child => assignIds(child))
-          : [],
-      };
-
-      // The AXNode for an option doesn't contain its `value`.
-      // Therefore, set text content of the option as value.
-      if (node.role === 'option') {
-        const optionText = node.name;
-        if (optionText) {
-          nodeWithId.value = optionText.toString();
-        }
-      }
-
-      idToNode.set(nodeWithId.id, nodeWithId);
-      return nodeWithId;
-    };
-
-    const rootNodeWithId = assignIds(rootNode);
-    this.#textSnapshot = {
-      root: rootNodeWithId,
-      snapshotId: String(snapshotId),
-      idToNode,
-      hasSelectedElement: false,
-      verbose,
-    };
-    const data = devtoolsData ?? (await this.getDevToolsData());
-    if (data?.cdpBackendNodeId) {
-      this.#textSnapshot.hasSelectedElement = true;
-      this.#textSnapshot.selectedElementUid = this.resolveCdpElementId(
-        data?.cdpBackendNodeId,
-      );
-    }
-  }
-
-  getTextSnapshot(): TextSnapshot | null {
-    return this.#textSnapshot;
   }
 
   async saveTemporaryFile(

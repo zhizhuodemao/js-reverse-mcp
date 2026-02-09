@@ -28,7 +28,6 @@ import * as networkTools from './tools/network.js';
 import * as pagesTools from './tools/pages.js';
 import * as screenshotTools from './tools/screenshot.js';
 import * as scriptTools from './tools/script.js';
-import * as snapshotTools from './tools/snapshot.js';
 import type {ToolDefinition} from './tools/ToolDefinition.js';
 import * as websocketTools from './tools/websocket.js';
 
@@ -165,7 +164,7 @@ const tools = [
   ...Object.values(pagesTools),
   ...Object.values(screenshotTools),
   ...Object.values(scriptTools),
-  ...Object.values(snapshotTools),
+
   ...Object.values(websocketTools),
 ] as ToolDefinition[];
 

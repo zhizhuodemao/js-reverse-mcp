@@ -72,7 +72,6 @@ export const listNetworkRequests = defineTool({
   },
   handler: async (request, response, context) => {
     const data = await context.getDevToolsData();
-    response.attachDevToolsData(data);
     const reqid = data?.cdpRequestId
       ? context.resolveCdpRequestId(data.cdpRequestId)
       : undefined;
@@ -106,7 +105,6 @@ export const getNetworkRequest = defineTool({
       response.attachNetworkRequest(request.params.reqid);
     } else {
       const data = await context.getDevToolsData();
-      response.attachDevToolsData(data);
       const reqid = data?.cdpRequestId
         ? context.resolveCdpRequestId(data.cdpRequestId)
         : undefined;

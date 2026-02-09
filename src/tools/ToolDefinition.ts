@@ -6,15 +6,9 @@
 
 import type {DebuggerContext} from '../DebuggerContext.js';
 import type {TrafficSummary} from '../formatters/websocketFormatter.js';
-import type {TextSnapshotNode} from '../McpContext.js';
 import type {RequestInitiator} from '../PageCollector.js';
 import {zod} from '../third_party/index.js';
-import type {
-  Dialog,
-  ElementHandle,
-  HTTPRequest,
-  Page,
-} from '../third_party/index.js';
+import type {Dialog, HTTPRequest, Page} from '../third_party/index.js';
 import type {TraceResult} from '../trace-processing/parse.js';
 import type {PaginationOptions} from '../utils/types.js';
 import type {WebSocketData} from '../WebSocketCollector.js';
@@ -51,11 +45,6 @@ export interface ImageContentData {
   mimeType: string;
 }
 
-export interface SnapshotParams {
-  verbose?: boolean;
-  filePath?: string;
-}
-
 export interface DevToolsData {
   cdpRequestId?: string;
   cdpBackendNodeId?: number;
@@ -79,12 +68,9 @@ export interface Response {
       includePreservedMessages?: boolean;
     },
   ): void;
-  includeSnapshot(params?: SnapshotParams): void;
   attachImage(value: ImageContentData): void;
   attachNetworkRequest(reqid: number): void;
   attachConsoleMessage(msgid: number): void;
-  // Allows re-using DevTools data queried by some tools.
-  attachDevToolsData(data: DevToolsData): void;
   // WebSocket methods
   setIncludeWebSocketConnections(
     value: boolean,
@@ -112,8 +98,6 @@ export type Context = Readonly<{
   newPage(): Promise<Page>;
   closePage(pageIdx: number): Promise<void>;
   selectPage(page: Page): void;
-  getElementByUid(uid: string): Promise<ElementHandle<Element>>;
-  getAXNodeByUid(uid: string): TextSnapshotNode | undefined;
   setNetworkConditions(conditions: string | null): void;
   setCpuThrottlingRate(rate: number): void;
   saveTemporaryFile(
@@ -134,10 +118,6 @@ export type Context = Readonly<{
    * Returns a reqid for a cdpRequestId.
    */
   resolveCdpRequestId(cdpRequestId: string): number | undefined;
-  /**
-   * Returns a reqid for a cdpRequestId.
-   */
-  resolveCdpElementId(cdpBackendNodeId: number): string | undefined;
   /**
    * Get the debugger context for script/breakpoint management.
    */

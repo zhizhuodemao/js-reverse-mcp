@@ -5,7 +5,6 @@
  */
 
 import {zod} from '../third_party/index.js';
-import type {ElementHandle, Page} from '../third_party/index.js';
 
 import {ToolCategory} from './categories.js';
 import {defineTool} from './ToolDefinition.js';
@@ -31,12 +30,6 @@ export const screenshot = defineTool({
       .describe(
         'Compression quality for JPEG and WebP formats (0-100). Higher values mean better quality but larger file sizes. Ignored for PNG format.',
       ),
-    uid: zod
-      .string()
-      .optional()
-      .describe(
-        'The uid of an element on the page from the page content snapshot. If omitted takes a pages screenshot.',
-      ),
     fullPage: zod
       .boolean()
       .optional()
@@ -51,32 +44,19 @@ export const screenshot = defineTool({
       ),
   },
   handler: async (request, response, context) => {
-    if (request.params.uid && request.params.fullPage) {
-      throw new Error('Providing both "uid" and "fullPage" is not allowed.');
-    }
-
-    let pageOrHandle: Page | ElementHandle;
-    if (request.params.uid) {
-      pageOrHandle = await context.getElementByUid(request.params.uid);
-    } else {
-      pageOrHandle = context.getSelectedPage();
-    }
+    const page = context.getSelectedPage();
 
     const format = request.params.format;
     const quality = format === 'png' ? undefined : request.params.quality;
 
-    const screenshot = await pageOrHandle.screenshot({
+    const screenshot = await page.screenshot({
       type: format,
       fullPage: request.params.fullPage,
       quality,
       optimizeForSpeed: true, // Bonus: optimize encoding for speed
     });
 
-    if (request.params.uid) {
-      response.appendResponseLine(
-        `Took a screenshot of node with uid "${request.params.uid}".`,
-      );
-    } else if (request.params.fullPage) {
+    if (request.params.fullPage) {
       response.appendResponseLine(
         'Took a screenshot of the full current page.',
       );
