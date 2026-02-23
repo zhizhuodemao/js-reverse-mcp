@@ -44,6 +44,7 @@ export async function ensureBrowserConnected(options: {
   wsEndpoint?: string;
   wsHeaders?: Record<string, string>;
   devtools: boolean;
+  initScript?: string;
 }) {
   if (browser?.connected) {
     return browser;
@@ -69,6 +70,12 @@ export async function ensureBrowserConnected(options: {
   logger('Connecting Puppeteer to ', JSON.stringify(connectOptions));
   browser = await puppeteer.connect(connectOptions);
   logger('Connected Puppeteer');
+  if (options.initScript) {
+    const pages = await browser.pages();
+    for (const page of pages) {
+      await page.evaluateOnNewDocument(options.initScript);
+    }
+  }
   return browser;
 }
 
@@ -86,6 +93,7 @@ interface McpLaunchOptions {
   };
   args?: string[];
   devtools: boolean;
+  initScript?: string;
 }
 
 export async function launch(options: McpLaunchOptions): Promise<Browser> {
@@ -152,6 +160,12 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
         contentWidth: options.viewport.width,
         contentHeight: options.viewport.height,
       });
+    }
+    if (options.initScript) {
+      const pages = await browser.pages();
+      for (const page of pages) {
+        await page.evaluateOnNewDocument(options.initScript);
+      }
     }
     return browser;
   } catch (error) {

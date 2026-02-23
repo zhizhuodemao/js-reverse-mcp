@@ -145,6 +145,11 @@ export const cliOptions = {
     describe:
       'Additional arguments for Chrome. Only applies when Chrome is launched by chrome-devtools-mcp.',
   },
+  initScript: {
+    type: 'string',
+    description:
+      'Path to a JavaScript file to inject into every page before any other script runs (e.g., stealth.min.js to bypass WebDriver detection).',
+  },
   categoryNetwork: {
     type: 'boolean',
     default: true,

@@ -38,6 +38,8 @@ interface McpContextOptions {
   experimentalDevToolsDebugging: boolean;
   // Whether all page-like targets are exposed as pages.
   experimentalIncludeAllPages?: boolean;
+  // JavaScript to inject into every page before any other script runs.
+  initScript?: string;
 }
 
 const DEFAULT_TIMEOUT = 5_000;
@@ -145,6 +147,11 @@ export class McpContext implements Context {
 
   async #init() {
     await this.createPagesSnapshot();
+    if (this.#options.initScript) {
+      for (const page of this.#pages) {
+        await page.evaluateOnNewDocument(this.#options.initScript);
+      }
+    }
     await this.#networkCollector.init();
     await this.#consoleCollector.init();
     await this.#webSocketCollector.init();
@@ -241,6 +248,9 @@ export class McpContext implements Context {
 
   async newPage(): Promise<Page> {
     const page = await this.browser.newPage();
+    if (this.#options.initScript) {
+      await page.evaluateOnNewDocument(this.#options.initScript);
+    }
     await this.createPagesSnapshot();
     this.selectPage(page);
     this.#networkCollector.addPage(page);
