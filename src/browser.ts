@@ -144,6 +144,7 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       pipe: true,
       headless,
       args,
+      ignoreDefaultArgs: ['--enable-automation'],
       acceptInsecureCerts: options.acceptInsecureCerts,
       handleDevToolsAsPage: true,
     });
