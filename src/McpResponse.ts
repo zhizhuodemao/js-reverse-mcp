@@ -383,6 +383,15 @@ export class McpResponse implements Response {
         idx++;
       }
       response.push(...parts);
+
+      // Show selected frame if not main frame
+      const selectedFrame = context.getSelectedFrame();
+      const mainFrame = context.getSelectedPage().mainFrame();
+      if (selectedFrame !== mainFrame) {
+        const name = selectedFrame.name() ? ` name="${selectedFrame.name()}"` : '';
+        response.push(`## Selected Frame`);
+        response.push(`${selectedFrame.url()}${name}`);
+      }
     }
 
     response.push(...this.#formatNetworkRequestData(context, data.bodies));

@@ -21,6 +21,7 @@ import type {
   ConsoleMessage,
   Debugger,
   Dialog,
+  Frame,
   HTTPRequest,
   Page,
   PredefinedNetworkConditions,
@@ -91,6 +92,7 @@ export class McpContext implements Context {
   #cpuThrottlingRateMap = new WeakMap<Page, number>();
   #dialog?: Dialog;
   #debuggerContext: DebuggerContext = new DebuggerContext();
+  #selectedFrame?: Frame;
 
   #traceResults: TraceResult[] = [];
   #trafficSummaryCache = new Map<number, TrafficSummary>();
@@ -348,10 +350,23 @@ export class McpContext implements Context {
       oldPage.off('dialog', this.#dialogHandler);
     }
     this.#selectedPage = newPage;
+    this.#selectedFrame = undefined;
     newPage.on('dialog', this.#dialogHandler);
     this.#updateSelectedPageTimeouts();
     // Reinitialize debugger for the new page
     void this.reinitDebugger();
+  }
+
+  getSelectedFrame(): Frame {
+    return this.#selectedFrame ?? this.getSelectedPage().mainFrame();
+  }
+
+  selectFrame(frame: Frame): void {
+    this.#selectedFrame = frame;
+  }
+
+  resetSelectedFrame(): void {
+    this.#selectedFrame = undefined;
   }
 
   #updateSelectedPageTimeouts() {

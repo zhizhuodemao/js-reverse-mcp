@@ -1526,8 +1526,8 @@ export const hookFunction = defineTool({
 `;
 
     try {
-      const page = context.getSelectedPage();
-      const result = await page.evaluate(hookCode);
+      const frame = context.getSelectedFrame();
+      const result = await frame.evaluate(hookCode);
 
       if (result && typeof result === 'object') {
         if ((result as {success: boolean}).success) {
@@ -1593,8 +1593,8 @@ export const unhookFunction = defineTool({
 `;
 
     try {
-      const page = context.getSelectedPage();
-      const result = await page.evaluate(unhookCode);
+      const frame = context.getSelectedFrame();
+      const result = await frame.evaluate(unhookCode);
 
       if (result && typeof result === 'object') {
         if ((result as {success: boolean}).success) {
@@ -1639,8 +1639,8 @@ export const listHooks = defineTool({
 `;
 
     try {
-      const page = context.getSelectedPage();
-      const hooks = (await page.evaluate(listCode)) as Array<{
+      const frame = context.getSelectedFrame();
+      const hooks = (await frame.evaluate(listCode)) as Array<{
         id: string;
         target: string;
       }>;
@@ -1785,8 +1785,8 @@ export const inspectObject = defineTool({
 `;
 
     try {
-      const page = context.getSelectedPage();
-      const result = await page.evaluate(inspectCode);
+      const frame = context.getSelectedFrame();
+      const result = await frame.evaluate(inspectCode);
 
       if (result && typeof result === 'object' && 'error' in result) {
         response.appendResponseLine(`❌ ${(result as {error: string}).error}`);
@@ -1898,8 +1898,8 @@ export const getStorage = defineTool({
 `;
 
     try {
-      const page = context.getSelectedPage();
-      const result = await page.evaluate(storageCode);
+      const frame = context.getSelectedFrame();
+      const result = await frame.evaluate(storageCode);
 
       response.appendResponseLine(
         `Storage data${filter ? ` (filter: "${filter}")` : ''}:\n`,
@@ -2111,8 +2111,8 @@ export const monitorEvents = defineTool({
 `;
 
     try {
-      const page = context.getSelectedPage();
-      const result = await page.evaluate(monitorCode);
+      const frame = context.getSelectedFrame();
+      const result = await frame.evaluate(monitorCode);
 
       if (result && typeof result === 'object') {
         if ((result as {success: boolean}).success) {
@@ -2177,8 +2177,8 @@ export const stopMonitor = defineTool({
 `;
 
     try {
-      const page = context.getSelectedPage();
-      const result = await page.evaluate(stopCode);
+      const frame = context.getSelectedFrame();
+      const result = await frame.evaluate(stopCode);
 
       if (result && typeof result === 'object') {
         if ((result as {success: boolean}).success) {

@@ -28,6 +28,7 @@ import {
 import {ToolCategory} from './tools/categories.js';
 import * as consoleTools from './tools/console.js';
 import * as debuggerTools from './tools/debugger.js';
+import * as frameTools from './tools/frames.js';
 import * as networkTools from './tools/network.js';
 import * as pagesTools from './tools/pages.js';
 import * as screenshotTools from './tools/screenshot.js';
@@ -186,6 +187,7 @@ function registerTool(tool: ToolDefinition): void {
 const tools = [
   ...Object.values(consoleTools),
   ...Object.values(debuggerTools),
+  ...Object.values(frameTools),
   ...Object.values(networkTools),
   ...Object.values(pagesTools),
   ...Object.values(screenshotTools),

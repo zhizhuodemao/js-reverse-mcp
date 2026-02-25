@@ -51,15 +51,15 @@ Example with arguments: \`(el) => {
   handler: async (request, response, context) => {
     let fn: JSHandle<unknown> | undefined;
     try {
-      const page = context.getSelectedPage();
+      const frame = context.getSelectedFrame();
       fn = await withTimeout(
-        page.evaluateHandle(`(${request.params.function})`),
+        frame.evaluateHandle(`(${request.params.function})`),
         DEFAULT_SCRIPT_TIMEOUT,
         'Script evaluation timed out',
       );
       await context.waitForEventsAfterAction(async () => {
         const result = await withTimeout(
-          page.evaluate(async fn => {
+          frame.evaluate(async fn => {
             // @ts-expect-error no types.
             return JSON.stringify(await fn());
           }, fn),
