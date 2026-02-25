@@ -160,10 +160,12 @@ export type Context = Readonly<{
   getSelectedFrame(): Frame;
   /**
    * Select a specific frame for code execution.
+   * Also reinitializes the debugger for the frame's CDP session.
    */
   selectFrame(frame: Frame): void;
   /**
    * Reset frame selection back to the main frame.
+   * Also reinitializes the debugger for the main page's CDP session.
    */
   resetSelectedFrame(): void;
 }>;

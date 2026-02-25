@@ -160,14 +160,21 @@ export class McpContext implements Context {
     await this.#initDebugger();
   }
 
-  async #initDebugger(): Promise<void> {
+  async #initDebugger(frame?: Frame): Promise<void> {
     const page = this.getSelectedPage();
     if (!page) {
       return;
     }
     try {
-      // @ts-expect-error _client is internal Puppeteer API
-      const client = page._client();
+      let client;
+      if (frame && frame !== page.mainFrame()) {
+        // Use the frame's own CDP session (works for OOPIFs / cross-origin iframes)
+        // @ts-expect-error client is a public getter on Frame but not in all type definitions
+        client = frame.client;
+      } else {
+        // @ts-expect-error _client is internal Puppeteer API
+        client = page._client();
+      }
       await this.#debuggerContext.enable(client);
     } catch (error) {
       this.logger('Failed to initialize debugger context', error);
@@ -195,6 +202,15 @@ export class McpContext implements Context {
   async reinitDebugger(): Promise<void> {
     await this.#debuggerContext.disable();
     await this.#initDebugger();
+  }
+
+  /**
+   * Reinitialize the debugger for a specific frame's CDP session.
+   * This enables script collection from cross-origin iframes (OOPIFs).
+   */
+  async reinitDebuggerForFrame(frame: Frame): Promise<void> {
+    await this.#debuggerContext.disable();
+    await this.#initDebugger(frame);
   }
 
   static async from(
@@ -363,10 +379,15 @@ export class McpContext implements Context {
 
   selectFrame(frame: Frame): void {
     this.#selectedFrame = frame;
+    // Reinitialize debugger for the frame's CDP session
+    // so that scripts from cross-origin iframes (OOPIFs) are visible
+    void this.reinitDebuggerForFrame(frame);
   }
 
   resetSelectedFrame(): void {
     this.#selectedFrame = undefined;
+    // Reinitialize debugger for the main page's CDP session
+    void this.reinitDebugger();
   }
 
   #updateSelectedPageTimeouts() {
