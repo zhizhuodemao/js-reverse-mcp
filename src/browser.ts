@@ -96,6 +96,38 @@ interface McpLaunchOptions {
   initScript?: string;
 }
 
+async function connectToExistingBrowser(
+  userDataDir: string,
+  initScript?: string,
+): Promise<Browser | undefined> {
+  const activePortPath = path.join(userDataDir, 'DevToolsActivePort');
+  try {
+    const content = await fs.promises.readFile(activePortPath, 'utf-8');
+    const port = parseInt(content.split('\n')[0], 10);
+    if (!port || isNaN(port)) {
+      return undefined;
+    }
+    const browserURL = `http://127.0.0.1:${port}`;
+    logger(`Attempting to connect to existing browser at ${browserURL}`);
+    const connectedBrowser = await puppeteer.connect({
+      browserURL,
+      targetFilter: makeTargetFilter(),
+      defaultViewport: null,
+      handleDevToolsAsPage: true,
+    });
+    logger('Successfully connected to existing browser');
+    if (initScript) {
+      const pages = await connectedBrowser.pages();
+      for (const page of pages) {
+        await page.evaluateOnNewDocument(initScript);
+      }
+    }
+    return connectedBrowser;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function launch(options: McpLaunchOptions): Promise<Browser> {
   const {channel, executablePath, headless, isolated} = options;
   const profileDirName =
@@ -120,6 +152,9 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
     ...(options.args ?? []),
     '--hide-crash-restore-bubble',
   ];
+  if (userDataDir) {
+    args.push('--remote-debugging-port=0');
+  }
   if (headless) {
     args.push('--screen-info={3840x2160}');
   }
@@ -174,6 +209,13 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       userDataDir &&
       (error as Error).message.includes('The browser is already running')
     ) {
+      const existingBrowser = await connectToExistingBrowser(
+        userDataDir,
+        options.initScript,
+      );
+      if (existingBrowser) {
+        return existingBrowser;
+      }
       throw new Error(
         `The browser is already running for ${userDataDir}. Use --isolated to run multiple browser instances.`,
         {
