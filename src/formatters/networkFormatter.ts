@@ -9,6 +9,16 @@ import {isUtf8} from 'node:buffer';
 import type {HTTPRequest, HTTPResponse} from '../third_party/index.js';
 
 const BODY_CONTEXT_SIZE_LIMIT = 10000;
+const BODY_FETCH_TIMEOUT_MS = 5000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Timed out fetching body')), ms),
+    ),
+  ]);
+}
 
 export function getShortDescriptionForRequest(
   request: HTTPRequest,
@@ -52,7 +62,7 @@ export async function getFormattedResponseBody(
   sizeLimit = BODY_CONTEXT_SIZE_LIMIT,
 ): Promise<string | undefined> {
   try {
-    const responseBuffer = await httpResponse.buffer();
+    const responseBuffer = await withTimeout(httpResponse.buffer(), BODY_FETCH_TIMEOUT_MS);
 
     if (isUtf8(responseBuffer)) {
       const responseAsTest = responseBuffer.toString('utf-8');
@@ -82,7 +92,7 @@ export async function getFormattedRequestBody(
     }
 
     try {
-      const fetchData = await httpRequest.fetchPostData();
+      const fetchData = await withTimeout(httpRequest.fetchPostData(), BODY_FETCH_TIMEOUT_MS);
 
       if (fetchData) {
         return `${getSizeLimitedString(fetchData, sizeLimit)}`;
