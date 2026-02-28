@@ -118,6 +118,7 @@ export class PageCollector<T> {
   }
 
   async init() {
+    // @ts-expect-error includeAllPages param may not exist in older puppeteer-core
     const pages = await this.#browser.pages(this.#includeAllPages);
     for (const page of pages) {
       this.addPage(page);

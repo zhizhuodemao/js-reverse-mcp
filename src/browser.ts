@@ -53,6 +53,7 @@ export async function ensureBrowserConnected(options: {
   const connectOptions: Parameters<typeof puppeteer.connect>[0] = {
     targetFilter: makeTargetFilter(),
     defaultViewport: null,
+    // @ts-expect-error handleDevToolsAsPage may not exist in older puppeteer-core
     handleDevToolsAsPage: true,
   };
 
@@ -146,6 +147,7 @@ export async function launch(options: McpLaunchOptions): Promise<Browser> {
       args,
       ignoreDefaultArgs: ['--enable-automation'],
       acceptInsecureCerts: options.acceptInsecureCerts,
+      // @ts-expect-error handleDevToolsAsPage may not exist in older puppeteer-core
       handleDevToolsAsPage: true,
     });
     if (options.logFile) {

@@ -162,6 +162,7 @@ export const navigatePage = defineTool({
             await page.reload({
               ...options,
               waitUntil: 'domcontentloaded',
+              // @ts-expect-error ignoreCache may not exist in older puppeteer-core
               ignoreCache: request.params.ignoreCache,
             });
             response.appendResponseLine(`Successfully reloaded the page.`);

@@ -414,9 +414,8 @@ export class McpContext implements Context {
    * Creates a snapshot of the pages.
    */
   async createPagesSnapshot(): Promise<Page[]> {
-    const allPages = await this.browser.pages(
-      this.#options.experimentalIncludeAllPages,
-    );
+    // @ts-expect-error includeAllPages param may not exist in older puppeteer-core
+    const allPages = await this.browser.pages(this.#options.experimentalIncludeAllPages);
 
     this.#pages = allPages.filter(page => {
       // If we allow debugging DevTools windows, return all pages.
@@ -438,9 +437,8 @@ export class McpContext implements Context {
 
   async detectOpenDevToolsWindows() {
     this.logger('Detecting open DevTools windows');
-    const pages = await this.browser.pages(
-      this.#options.experimentalIncludeAllPages,
-    );
+    // @ts-expect-error includeAllPages param may not exist in older puppeteer-core
+    const pages = await this.browser.pages(this.#options.experimentalIncludeAllPages);
     this.#pageToDevToolsPage = new Map<Page, Page>();
     for (const devToolsPage of pages) {
       if (devToolsPage.url().startsWith('devtools://')) {

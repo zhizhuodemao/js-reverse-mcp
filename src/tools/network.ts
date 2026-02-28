@@ -28,7 +28,6 @@ const FILTERABLE_RESOURCE_TYPES: readonly [ResourceType, ...ResourceType[]] = [
   'ping',
   'cspviolationreport',
   'preflight',
-  'fedcm',
   'other',
 ];
 

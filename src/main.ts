@@ -70,12 +70,20 @@ const initScript = (() => {
     '..',
     '..',
   );
+  const parts: string[] = [];
   const defaultPath = path.join(projectRoot, 'scripts', 'stealth.min.js');
   try {
-    return fs.readFileSync(defaultPath, 'utf-8');
+    parts.push(fs.readFileSync(defaultPath, 'utf-8'));
   } catch {
-    return undefined;
+    // stealth.min.js not found, continue without it
   }
+  const patchPath = path.join(projectRoot, 'scripts', 'stealth-patch.js');
+  try {
+    parts.push(fs.readFileSync(patchPath, 'utf-8'));
+  } catch {
+    // patch not found, continue without it
+  }
+  return parts.length > 0 ? parts.join('\n') : undefined;
 })();
 
 async function getContext(): Promise<McpContext> {
