@@ -167,6 +167,25 @@ export const getScriptSource = defineTool({
         const start = (startLine ?? 1) - 1; // Convert to 0-based
         const end = endLine ?? lines.length;
         const selectedLines = lines.slice(start, end);
+        const content = selectedLines.join('\n');
+
+        // If the selected range is too large, it's likely minified — suggest offset mode
+        if (content.length > 1000) {
+          const lineOffset = lines
+            .slice(0, start)
+            .reduce((sum, l) => sum + l.length + 1, 0);
+          response.appendResponseLine(
+            `Selected lines ${start + 1}-${Math.min(end, lines.length)} of script ${scriptId} are too large (${content.length} chars). This file is likely minified.`,
+          );
+          response.appendResponseLine(
+            `Use offset/length params instead. The character offset for line ${start + 1} is ${lineOffset}.`,
+          );
+          response.appendResponseLine(`First 1000 characters:\n`);
+          response.appendResponseLine('```javascript');
+          response.appendResponseLine(content.substring(0, 1000) + '...');
+          response.appendResponseLine('```');
+          return;
+        }
 
         response.appendResponseLine(
           `Source for script ${scriptId} (lines ${start + 1}-${Math.min(end, lines.length)}):\n`,
@@ -180,7 +199,7 @@ export const getScriptSource = defineTool({
       }
 
       // Full source - but warn if it's too large
-      if (source.length > 50000) {
+      if (source.length > 1000) {
         response.appendResponseLine(
           `Script ${scriptId} is large (${source.length} chars). Use offset/length or startLine/endLine to read portions.`,
         );
