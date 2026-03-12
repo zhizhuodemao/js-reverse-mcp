@@ -56,11 +56,11 @@ Example with arguments: \`(el) => {
       const pausedState = debugger_.getPausedState();
       const callFrameId = pausedState.callFrames[0]?.callFrameId;
       if (callFrameId) {
-        const expression = `JSON.stringify(await (${request.params.function})())`;
+        const expression = `(async () => JSON.stringify(await (${request.params.function})()))()`;
         const result = await debugger_.evaluateOnCallFrame(
           callFrameId,
           expression,
-          {returnByValue: true},
+          {returnByValue: true, awaitPromise: true},
         );
 
         if (result.exceptionDetails) {
