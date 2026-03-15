@@ -152,3 +152,6 @@ log.txt
 
 # MCP config
 .mcp.json
+
+# npm auth
+.npmrc
