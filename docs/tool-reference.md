@@ -2,26 +2,19 @@
 
 # Chrome DevTools MCP Tool Reference
 
-- **[Navigation automation](#navigation-automation)** (4 tools)
-  - [`list_pages`](#list_pages)
+- **[Navigation automation](#navigation-automation)** (3 tools)
   - [`navigate_page`](#navigate_page)
   - [`new_page`](#new_page)
   - [`select_page`](#select_page)
-- **[Network](#network)** (6 tools)
-  - [`analyze_websocket_messages`](#analyze_websocket_messages)
-  - [`get_network_request`](#get_network_request)
-  - [`get_websocket_message`](#get_websocket_message)
+- **[Network](#network)** (2 tools)
   - [`get_websocket_messages`](#get_websocket_messages)
   - [`list_network_requests`](#list_network_requests)
-  - [`list_websocket_connections`](#list_websocket_connections)
-- **[Debugging](#debugging)** (6 tools)
+- **[Debugging](#debugging)** (4 tools)
   - [`evaluate_script`](#evaluate_script)
-  - [`get_console_message`](#get_console_message)
   - [`list_console_messages`](#list_console_messages)
-  - [`list_frames`](#list_frames)
   - [`select_frame`](#select_frame)
   - [`take_screenshot`](#take_screenshot)
-- **[JS Reverse Engineering](#js-reverse-engineering)** (20 tools)
+- **[JS Reverse Engineering](#js-reverse-engineering)** (14 tools)
   - [`break_on_xhr`](#break_on_xhr)
   - [`get_paused_info`](#get_paused_info)
   - [`get_request_initiator`](#get_request_initiator)
@@ -29,29 +22,15 @@
   - [`inject_before_load`](#inject_before_load)
   - [`list_breakpoints`](#list_breakpoints)
   - [`list_scripts`](#list_scripts)
-  - [`pause`](#pause)
-  - [`remove_all_breakpoints`](#remove_all_breakpoints)
+  - [`pause_or_resume`](#pause_or_resume)
   - [`remove_breakpoint`](#remove_breakpoint)
-  - [`remove_injected_script`](#remove_injected_script)
-  - [`remove_xhr_breakpoint`](#remove_xhr_breakpoint)
-  - [`resume`](#resume)
   - [`save_script_source`](#save_script_source)
   - [`search_in_sources`](#search_in_sources)
   - [`set_breakpoint_on_text`](#set_breakpoint_on_text)
-  - [`step_into`](#step_into)
-  - [`step_out`](#step_out)
-  - [`step_over`](#step_over)
+  - [`step`](#step)
   - [`trace_function`](#trace_function)
 
 ## Navigation automation
-
-### `list_pages`
-
-**Description:** Get a list of pages open in the browser.
-
-**Parameters:** None
-
----
 
 ### `navigate_page`
 
@@ -79,87 +58,47 @@
 
 ### `select_page`
 
-**Description:** Select a page as a context for future tool calls.
+**Description:** Lists all open pages in the browser. Pass pageIdx to select a page as context for future tool calls.
 
 **Parameters:**
 
-- **pageIdx** (number) **(required)**: The index of the page to select. Call [`list_pages`](#list_pages) to list pages.
+- **pageIdx** (number) _(optional)_: The index of the page to select. If omitted, lists all pages without changing selection.
 
 ---
 
 ## Network
 
-### `analyze_websocket_messages`
-
-**Description:** Analyzes WebSocket messages and groups them by pattern/fingerprint. Essential for understanding binary/protobuf message types in live streaming scenarios. Returns statistics and sample indices for each message type.
-
-**Parameters:**
-
-- **direction** (enum: "sent", "received") _(optional)_: Only analyze messages in this direction.
-- **wsid** (number) **(required)**: The wsid of the WebSocket connection to analyze.
-
----
-
-### `get_network_request`
-
-**Description:** Gets a network request by an optional reqid, if omitted returns the currently selected request in the DevTools Network panel.
-
-**Parameters:**
-
-- **reqid** (number) _(optional)_: The reqid of the network request. If omitted returns the currently selected request in the DevTools Network panel.
-
----
-
-### `get_websocket_message`
-
-**Description:** Gets a single WebSocket message by its frame index. Use [`get_websocket_messages`](#get_websocket_messages) or [`analyze_websocket_messages`](#analyze_websocket_messages) first to find the frame index.
-
-**Parameters:**
-
-- **frameIndex** (integer) **(required)**: The frame index (0-based) to retrieve.
-- **wsid** (number) **(required)**: The wsid of the WebSocket connection.
-
----
-
 ### `get_websocket_messages`
 
-**Description:** Gets messages for a WebSocket connection. IMPORTANT: For binary/protobuf messages (like live streaming), use [`analyze_websocket_messages`](#analyze_websocket_messages) FIRST to understand message types, then use groupId parameter to filter specific types. Default mode shows summary only.
+**Description:** Lists WebSocket connections or gets messages for a specific connection. Without wsid, lists all connections. With wsid, gets messages. Set analyze=true to group messages by pattern. Use groupId to filter by group. Use frameIndex to get a single message's full detail.
 
 **Parameters:**
 
+- **analyze** (boolean) _(optional)_: Set to true to analyze and group messages by pattern/fingerprint. Returns statistics and sample indices for each message type.
 - **direction** (enum: "sent", "received") _(optional)_: Filter by direction: "sent" or "received".
-- **groupId** (string) _(optional)_: Filter by group ID (A, B, C, ...). Get group IDs from [`analyze_websocket_messages`](#analyze_websocket_messages) first.
+- **frameIndex** (integer) _(optional)_: Get a single message by its frame index (0-based). Returns full detail for that message.
+- **groupId** (string) _(optional)_: Filter by group ID (A, B, C, ...). Run with analyze=true first to get group IDs.
+- **includePreservedConnections** (boolean) _(optional)_: Set to true to return the preserved connections over the last 3 navigations (only for listing connections without wsid).
 - **pageIdx** (integer) _(optional)_: Page number (0-based).
-- **pageSize** (integer) _(optional)_: Messages per page. Defaults to 10.
+- **pageSize** (integer) _(optional)_: Messages per page (for messages mode) or connections per page (for list mode). Defaults to 10.
 - **show_content** (boolean) _(optional)_: Set to true to show full message payload. Default false (summary only) to avoid large binary output.
-- **wsid** (number) **(required)**: The wsid of the WebSocket connection.
+- **urlFilter** (string) _(optional)_: Filter connections by URL (only for listing connections without wsid).
+- **wsid** (number) _(optional)_: The wsid of the WebSocket connection. If omitted, lists all connections.
 
 ---
 
 ### `list_network_requests`
 
-**Description:** List network requests for the currently selected page since the last navigation. Results are sorted newest-first. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate.
+**Description:** List network requests for the currently selected page since the last navigation. Results are sorted newest-first. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate. Pass reqid to get a single request's full details.
 
 **Parameters:**
 
 - **includePreservedRequests** (boolean) _(optional)_: Set to true to return the preserved requests over the last 3 navigations.
 - **pageIdx** (integer) _(optional)_: Page number to return (0-based). When omitted, returns the first page.
 - **pageSize** (integer) _(optional)_: Maximum number of requests to return. Defaults to 20.
+- **reqid** (number) _(optional)_: The reqid of a specific network request to get full details for. If omitted, lists all requests.
 - **resourceTypes** (array) _(optional)_: Filter requests to only return requests of the specified resource types. When omitted or empty, returns all requests.
 - **urlFilter** (string) _(optional)_: Filter requests by URL. Only requests containing this substring will be returned.
-
----
-
-### `list_websocket_connections`
-
-**Description:** List all WebSocket connections. After getting wsid, use [`analyze_websocket_messages`](#analyze_websocket_messages)(wsid) FIRST to understand message patterns before viewing individual messages.
-
-**Parameters:**
-
-- **includePreservedConnections** (boolean) _(optional)_: Set to true to return the preserved connections over the last 3 navigations.
-- **pageIdx** (integer) _(optional)_: Page number to return (0-based). When omitted, returns the first page.
-- **pageSize** (integer) _(optional)_: Maximum number of connections to return. When omitted, returns all connections.
-- **urlFilter** (string) _(optional)_: Filter connections by URL. Only connections containing this substring will be returned.
 
 ---
 
@@ -186,44 +125,27 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ---
 
-### `get_console_message`
-
-**Description:** Gets a console message by its ID. You can get all messages by calling [`list_console_messages`](#list_console_messages).
-
-**Parameters:**
-
-- **msgid** (number) **(required)**: The msgid of a console message on the page from the listed console messages
-
----
-
 ### `list_console_messages`
 
-**Description:** List all console messages for the currently selected page since the last navigation.
+**Description:** List all console messages for the currently selected page since the last navigation. Pass msgid to get a single message by its ID.
 
 **Parameters:**
 
 - **includePreservedMessages** (boolean) _(optional)_: Set to true to return the preserved messages over the last 3 navigations.
+- **msgid** (number) _(optional)_: The msgid of a console message on the page from the listed console messages
 - **pageIdx** (integer) _(optional)_: Page number to return (0-based). When omitted, returns the first page.
 - **pageSize** (integer) _(optional)_: Maximum number of messages to return. When omitted, returns all requests.
 - **types** (array) _(optional)_: Filter messages to only return messages of the specified resource types. When omitted or empty, returns all messages.
 
 ---
 
-### `list_frames`
-
-**Description:** Lists all frames (including iframes) in the current page as a tree. Shows frame index, name, and URL. Use [`select_frame`](#select_frame) to switch execution context to a specific frame.
-
-**Parameters:** None
-
----
-
 ### `select_frame`
 
-**Description:** Selects a frame (by index from [`list_frames`](#list_frames)) as the execution context for [`evaluate_script`](#evaluate_script), hook_function, inspect_object, and other tools that run JavaScript in the page.
+**Description:** Lists all frames (including iframes) in the current page. Pass frameIdx to switch execution context to that frame for [`evaluate_script`](#evaluate_script) and other tools.
 
 **Parameters:**
 
-- **frameIdx** (integer) **(required)**: The frame index (from [`list_frames`](#list_frames)). 0 = main frame.
+- **frameIdx** (integer) _(optional)_: The frame index to select. 0 = main frame. If omitted, lists all frames without changing selection.
 
 ---
 
@@ -290,11 +212,12 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ### `inject_before_load`
 
-**Description:** Injects a JavaScript script that runs before any page script on every page load (including refreshes and navigations). Persists until removed. Uses CDP Page.addScriptToEvaluateOnNewDocument.
+**Description:** Injects a JavaScript script that runs before any page script on every page load. Pass script to inject, or pass identifier to remove a previously injected script.
 
 **Parameters:**
 
-- **script** (string) **(required)**: JavaScript code to inject. Runs before any page script. Example: Object.defineProperty(window, "h5sign", { set(v) { debugger; this.\_h5sign = v; }, get() { return this.\_h5sign; } })
+- **identifier** (string) _(optional)_: The identifier of a previously injected script to remove.
+- **script** (string) _(optional)_: JavaScript code to inject. Runs before any page script. Example: Object.defineProperty(window, "h5sign", { set(v) { debugger; this.\_h5sign = v; }, get() { return this.\_h5sign; } })
 
 ---
 
@@ -316,17 +239,9 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ---
 
-### `pause`
+### `pause_or_resume`
 
-**Description:** Pauses JavaScript execution at the current point. Use this to interrupt running code.
-
-**Parameters:** None
-
----
-
-### `remove_all_breakpoints`
-
-**Description:** Removes all active breakpoints. Use this to clean up debugging state.
+**Description:** Toggles JavaScript execution. If paused, resumes execution. If running, pauses execution.
 
 **Parameters:** None
 
@@ -334,39 +249,12 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ### `remove_breakpoint`
 
-**Description:** Removes a breakpoint by its ID. Use [`list_breakpoints`](#list_breakpoints) to see active breakpoints.
+**Description:** Removes breakpoints and automatically resumes execution if paused. Pass breakpointId to remove a code breakpoint, url to remove an XHR breakpoint, or neither to remove ALL breakpoints (code + XHR).
 
 **Parameters:**
 
-- **breakpointId** (string) **(required)**: The breakpoint ID to remove (from [`list_breakpoints`](#list_breakpoints) or [`set_breakpoint_on_text`](#set_breakpoint_on_text)).
-
----
-
-### `remove_injected_script`
-
-**Description:** Removes a script previously injected with [`inject_before_load`](#inject_before_load).
-
-**Parameters:**
-
-- **identifier** (string) **(required)**: The identifier returned by [`inject_before_load`](#inject_before_load).
-
----
-
-### `remove_xhr_breakpoint`
-
-**Description:** Removes an XHR/Fetch breakpoint.
-
-**Parameters:**
-
-- **url** (string) **(required)**: The URL pattern to remove breakpoint for.
-
----
-
-### `resume`
-
-**Description:** Resumes JavaScript execution after being paused at a breakpoint. Execution continues until the next breakpoint or completion.
-
-**Parameters:** None
+- **breakpointId** (string) _(optional)_: The breakpoint ID to remove (from [`list_breakpoints`](#list_breakpoints) or [`set_breakpoint_on_text`](#set_breakpoint_on_text)).
+- **url** (string) _(optional)_: The XHR breakpoint URL pattern to remove.
 
 ---
 
@@ -411,27 +299,13 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ---
 
-### `step_into`
+### `step`
 
-**Description:** Steps into the next function call. Use this to enter and debug function bodies.
+**Description:** Steps JavaScript execution. Use direction "over" to skip function calls, "into" to enter function bodies, "out" to exit the current function. Returns the new location with source context.
 
-**Parameters:** None
+**Parameters:**
 
----
-
-### `step_out`
-
-**Description:** Steps out of the current function, continuing until the function returns. Use this to quickly exit a function.
-
-**Parameters:** None
-
----
-
-### `step_over`
-
-**Description:** Steps over to the next statement, treating function calls as a single step. Use this to move through code without entering function bodies.
-
-**Parameters:** None
+- **direction** (enum: "over", "into", "out") **(required)**: [`Step`](#step) direction: "over" (next statement), "into" (enter function), "out" (exit function).
 
 ---
 
@@ -444,7 +318,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 - **functionName** (string) **(required)**: The function name to trace. Will search for "function NAME" or "NAME = function" or "NAME(" patterns.
 - **logArgs** (boolean) _(optional)_: Whether to log function arguments (default: true).
 - **logThis** (boolean) _(optional)_: Whether to log "this" context (default: false).
-- **pause** (boolean) _(optional)_: Whether to actually [`pause`](#pause) execution (default: false, just logs).
+- **pause** (boolean) _(optional)_: Whether to actually pause execution (default: false, just logs).
 - **traceId** (string) _(optional)_: Custom ID for this trace. Used to identify in logs.
 - **urlFilter** (string) _(optional)_: Only search in scripts matching this URL pattern.
 

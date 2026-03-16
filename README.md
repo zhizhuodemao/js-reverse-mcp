@@ -9,13 +9,13 @@ Built on the [Patchright](https://github.com/nicecaesar/patchright) anti-detecti
 ## Features
 
 - **Anti-detection browser**: Based on Patchright (Playwright anti-detection fork), 60+ stealth launch arguments, bypasses mainstream anti-bot systems
-- **Script analysis**: List all loaded JS scripts, search code, get source code
+- **Script analysis**: List all loaded JS scripts, search code, get/save source code
 - **Breakpoint debugging**: Set/remove breakpoints, conditional breakpoints, precise positioning in minified code
-- **Function tracing**: Hook any function (including module-internal functions), monitor calls and return values
-- **Execution control**: Pause/resume execution, step debugging (step over/into/out)
+- **Function tracing**: Trace any function (including module-internal functions) via logpoints
+- **Execution control**: Pause/resume execution, step debugging (over/into/out) with source context
 - **Runtime inspection**: Evaluate expressions at breakpoints, inspect scope variables
 - **Network analysis**: View request initiator call stacks, set XHR breakpoints, WebSocket message analysis
-- **Event monitoring**: Monitor DOM events, inspect storage data
+- **Script injection**: Inject scripts that run before page load for interception and instrumentation
 
 ## Requirements
 
@@ -90,80 +90,60 @@ js-reverse-mcp includes multi-layered anti-detection measures to work on sites w
 | Google Referer Spoofing | All navigations automatically include `referer: https://www.google.com/` |
 | Persistent Login State | Uses persistent user-data-dir by default, login state preserved across sessions |
 
-## Tools
+## Tools (23)
+
+### Page & Navigation
+
+| Tool              | Description                                                    |
+| ----------------- | -------------------------------------------------------------- |
+| `select_page`     | List open pages, or select one by index as debugging context   |
+| `new_page`        | Create a new page and navigate to URL                          |
+| `navigate_page`   | Navigate, go back, forward, or reload                          |
+| `select_frame`    | List all frames (iframes), or select one as execution context  |
+| `take_screenshot` | Take a page screenshot                                         |
 
 ### Script Analysis
 
 | Tool                | Description                                                    |
 | ------------------- | -------------------------------------------------------------- |
 | `list_scripts`      | List all JavaScript scripts loaded in the page                 |
-| `get_script_source` | Get script source code, supports line range or character offset (for minified files) |
+| `get_script_source` | Get script source snippet by line range or character offset    |
+| `save_script_source`| Save full script source to a local file (for large/minified files) |
 | `search_in_sources` | Search for strings or regex patterns across all scripts        |
 
-### Breakpoint Management
+### Breakpoint & Execution Control
 
 | Tool                     | Description                                                |
 | ------------------------ | ---------------------------------------------------------- |
 | `set_breakpoint_on_text` | Set breakpoint by searching code text (works with minified code) |
-| `remove_breakpoint`      | Remove a breakpoint                                        |
+| `break_on_xhr`           | Set XHR/Fetch breakpoint by URL pattern                    |
+| `remove_breakpoint`      | Remove breakpoint(s) by ID, URL, or all; auto-resumes     |
 | `list_breakpoints`       | List all active breakpoints                                |
+| `get_paused_info`        | Get paused state, call stack and scope variables           |
+| `pause_or_resume`        | Toggle pause/resume execution                              |
+| `step`                   | Step over, into, or out with source context in response    |
 
-### Debug Control
+### Function Tracing & Injection
 
-| Tool                    | Description                                   |
-| ----------------------- | --------------------------------------------- |
-| `get_paused_info`       | Get paused state, call stack and scope variables |
-| `resume`                | Resume execution                              |
-| `pause`                 | Pause execution                               |
-| `step_over`             | Step over                                     |
-| `step_into`             | Step into                                     |
-| `step_out`              | Step out                                      |
+| Tool                | Description                                                           |
+| ------------------- | --------------------------------------------------------------------- |
+| `trace_function`    | Trace any function call (including bundled internals) via logpoints   |
+| `inject_before_load`| Inject or remove a script that runs before page load                  |
 
-### Function Hooking
+### Network & WebSocket
 
-| Tool              | Description                                                           |
-| ----------------- | --------------------------------------------------------------------- |
-| `hook_function`   | Hook global functions or object methods, log calls and return values  |
-| `unhook_function` | Remove a function hook                                                |
-| `list_hooks`      | List all active hooks                                                 |
-| `trace_function`  | Trace any function call (including module-internal functions), uses conditional breakpoints |
+| Tool                     | Description                                    |
+| ------------------------ | ---------------------------------------------- |
+| `list_network_requests`  | List network requests, or get one by reqid     |
+| `get_request_initiator`  | Get JavaScript call stack for a network request|
+| `get_websocket_messages` | List WebSocket connections, analyze messages, or get message details |
 
-### Network Debugging
-
-| Tool                            | Description                               |
-| ------------------------------- | ----------------------------------------- |
-| `list_network_requests`         | List network requests                     |
-| `get_network_request`           | Get request details and response content  |
-| `get_request_initiator`         | Get JavaScript call stack for a network request |
-| `break_on_xhr`                  | Set XHR/Fetch breakpoint                  |
-| `remove_xhr_breakpoint`         | Remove XHR breakpoint                     |
-| `list_websocket_connections`    | List WebSocket connections                |
-| `get_websocket_messages`        | Get WebSocket messages                    |
-| `analyze_websocket_messages`    | Analyze WebSocket message patterns        |
-
-### Inspection Tools
+### Inspection
 
 | Tool                    | Description                                    |
 | ----------------------- | ---------------------------------------------- |
-| `evaluate_script`       | Execute JavaScript in the page                 |
-| `inspect_object`        | Deep inspect JavaScript object structure       |
-| `get_storage`           | Get cookies, localStorage, sessionStorage      |
-| `monitor_events`        | Monitor DOM events on elements or window       |
-| `stop_monitor`          | Stop event monitoring                          |
-| `list_console_messages` | Get console messages                           |
-| `get_console_message`   | Get console message details                    |
-
-### Page Management
-
-| Tool              | Description                           |
-| ----------------- | ------------------------------------- |
-| `list_pages`      | List pages open in the browser        |
-| `select_page`     | Select a page as debugging context    |
-| `new_page`        | Create a new page and navigate to URL |
-| `navigate_page`   | Navigate, go back, forward, or reload |
-| `list_frames`     | List all frames in the page           |
-| `select_frame`    | Select a frame as execution context   |
-| `take_screenshot` | Take a page screenshot                |
+| `evaluate_script`       | Execute JavaScript in the page (supports paused context and main world) |
+| `list_console_messages` | List console messages, or get one by msgid     |
 
 ## Usage Examples
 
@@ -191,12 +171,6 @@ Set a breakpoint at the entry of the encryption function
 
 ```
 Trigger an action on the page, then inspect arguments, call stack and scope variables when the breakpoint hits
-```
-
-### Hook Encryption Functions
-
-```
-Hook the fetch function to log all API call arguments and return values
 ```
 
 ### Trace Module-Internal Functions

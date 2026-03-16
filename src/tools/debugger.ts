@@ -896,12 +896,12 @@ export const getPausedInfo = defineTool({
 /**
  * Resume execution after a breakpoint.
  */
-export const resume = defineTool({
-  name: 'resume',
+export const pauseOrResume = defineTool({
+  name: 'pause_or_resume',
   description:
-    'Resumes JavaScript execution after being paused at a breakpoint. Execution continues until the next breakpoint or completion.',
+    'Toggles JavaScript execution. If paused, resumes execution. If running, pauses execution.',
   annotations: {
-    title: 'Resume Execution',
+    title: 'Pause / Resume',
     category: ToolCategory.REVERSE_ENGINEERING,
     readOnlyHint: false,
   },
@@ -916,76 +916,43 @@ export const resume = defineTool({
       return;
     }
 
-    if (!debugger_.isPaused()) {
-      response.appendResponseLine('Execution is not paused.');
-      return;
-    }
-
     try {
-      await debugger_.resume();
-      response.appendResponseLine('▶️ Execution resumed.');
+      if (debugger_.isPaused()) {
+        await debugger_.resume();
+        response.appendResponseLine('▶️ Execution resumed.');
+      } else {
+        await debugger_.pause();
+        response.appendResponseLine(
+          '⏸️ Pause requested. Waiting for execution to pause...',
+        );
+      }
     } catch (error) {
       response.appendResponseLine(
-        `Error resuming: ${error instanceof Error ? error.message : String(error)}`,
+        `Error: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   },
 });
 
 /**
- * Pause execution.
+ * Step execution: over, into, or out.
  */
-export const pause = defineTool({
-  name: 'pause',
+export const step = defineTool({
+  name: 'step',
   description:
-    'Pauses JavaScript execution at the current point. Use this to interrupt running code.',
+    'Steps JavaScript execution. Use direction "over" to skip function calls, "into" to enter function bodies, "out" to exit the current function. Returns the new location with source context.',
   annotations: {
-    title: 'Pause Execution',
+    title: 'Step',
     category: ToolCategory.REVERSE_ENGINEERING,
     readOnlyHint: false,
   },
-  schema: {},
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    if (debugger_.isPaused()) {
-      response.appendResponseLine('Execution is already paused.');
-      return;
-    }
-
-    try {
-      await debugger_.pause();
-      response.appendResponseLine(
-        '⏸️ Pause requested. Waiting for execution to pause...',
-      );
-    } catch (error) {
-      response.appendResponseLine(
-        `Error pausing: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
+  schema: {
+    direction: zod
+      .enum(['over', 'into', 'out'])
+      .describe(
+        'Step direction: "over" (next statement), "into" (enter function), "out" (exit function).',
+      ),
   },
-});
-
-/**
- * Step over to the next statement.
- */
-export const stepOver = defineTool({
-  name: 'step_over',
-  description:
-    'Steps over to the next statement, treating function calls as a single step. Use this to move through code without entering function bodies.',
-  annotations: {
-    title: 'Step Over',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {},
   handler: async (request, response, context) => {
     const debugger_ = context.debuggerContext;
 
@@ -1001,90 +968,24 @@ export const stepOver = defineTool({
       return;
     }
 
-    try {
-      const frame = await debugger_.stepOver();
-      await appendStepSummary(response, debugger_, '⏭️ Stepped over', frame);
-    } catch (error) {
-      response.appendResponseLine(
-        `Error stepping over: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
-
-/**
- * Step into the next function call.
- */
-export const stepInto = defineTool({
-  name: 'step_into',
-  description:
-    'Steps into the next function call. Use this to enter and debug function bodies.',
-  annotations: {
-    title: 'Step Into',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {},
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    if (!debugger_.isPaused()) {
-      response.appendResponseLine('Execution is not paused. Cannot step.');
-      return;
-    }
+    const {direction} = request.params;
+    const labels = {
+      over: '⏭️ Stepped over',
+      into: '⬇️ Stepped into',
+      out: '⬆️ Stepped out',
+    } as const;
 
     try {
-      const frame = await debugger_.stepInto();
-      await appendStepSummary(response, debugger_, '⬇️ Stepped into', frame);
+      const frame =
+        direction === 'over'
+          ? await debugger_.stepOver()
+          : direction === 'into'
+            ? await debugger_.stepInto()
+            : await debugger_.stepOut();
+      await appendStepSummary(response, debugger_, labels[direction], frame);
     } catch (error) {
       response.appendResponseLine(
-        `Error stepping into: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
-
-/**
- * Step out of the current function.
- */
-export const stepOut = defineTool({
-  name: 'step_out',
-  description:
-    'Steps out of the current function, continuing until the function returns. Use this to quickly exit a function.',
-  annotations: {
-    title: 'Step Out',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {},
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    if (!debugger_.isPaused()) {
-      response.appendResponseLine('Execution is not paused. Cannot step.');
-      return;
-    }
-
-    try {
-      const frame = await debugger_.stepOut();
-      await appendStepSummary(response, debugger_, '⬆️ Stepped out', frame);
-    } catch (error) {
-      response.appendResponseLine(
-        `Error stepping out: ${error instanceof Error ? error.message : String(error)}`,
+        `Error stepping ${direction}: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   },
@@ -1513,13 +1414,12 @@ export const traceFunction = defineTool({
 });
 
 /**
- * Inject a script to run before every page load.
- * Uses CDP Page.addScriptToEvaluateOnNewDocument.
+ * Inject or remove a script that runs before every page load.
  */
-export const injectBeforeLoad = defineTool({
+export const injectScript = defineTool({
   name: 'inject_before_load',
   description:
-    'Injects a JavaScript script that runs before any page script on every page load (including refreshes and navigations). Persists until removed. Uses CDP Page.addScriptToEvaluateOnNewDocument.',
+    'Injects a JavaScript script that runs before any page script on every page load. Pass script to inject, or pass identifier to remove a previously injected script.',
   annotations: {
     title: 'Inject Before Load',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -1528,70 +1428,15 @@ export const injectBeforeLoad = defineTool({
   schema: {
     script: zod
       .string()
+      .optional()
       .describe(
         'JavaScript code to inject. Runs before any page script. Example: Object.defineProperty(window, "h5sign", { set(v) { debugger; this._h5sign = v; }, get() { return this._h5sign; } })',
       ),
-  },
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    const client = debugger_.getClient();
-    if (!client) {
-      response.appendResponseLine('Debugger client not available.');
-      return;
-    }
-
-    const {script} = request.params;
-
-    try {
-      await client.send('Page.enable');
-      const result = await client.send(
-        'Page.addScriptToEvaluateOnNewDocument',
-        {source: script},
-      );
-      const identifier = result.identifier;
-      context.trackInjectedScript(identifier, script);
-      response.appendResponseLine(
-        `Script injected. Identifier: ${identifier}`,
-      );
-      response.appendResponseLine(
-        'It will run before any page script on every load.',
-      );
-      response.appendResponseLine(
-        `Use remove_injected_script(identifier: "${identifier}") to remove.`,
-      );
-    } catch (error) {
-      response.appendResponseLine(
-        `Error: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
-
-/**
- * Remove an injected script.
- */
-export const removeInjectedScript = defineTool({
-  name: 'remove_injected_script',
-  description:
-    'Removes a script previously injected with inject_before_load.',
-  annotations: {
-    title: 'Remove Injected Script',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {
     identifier: zod
       .string()
+      .optional()
       .describe(
-        'The identifier returned by inject_before_load.',
+        'The identifier of a previously injected script to remove.',
       ),
   },
   handler: async (request, response, context) => {
@@ -1610,17 +1455,45 @@ export const removeInjectedScript = defineTool({
       return;
     }
 
-    const {identifier} = request.params;
+    const {script, identifier} = request.params;
+
+    if (!script && !identifier) {
+      response.appendResponseLine(
+        'Either script (to inject) or identifier (to remove) must be provided.',
+      );
+      return;
+    }
 
     try {
       await client.send('Page.enable');
-      await client.send('Page.removeScriptToEvaluateOnNewDocument', {
-        identifier,
-      });
-      context.untrackInjectedScript(identifier);
-      response.appendResponseLine(
-        `Injected script ${identifier} removed.`,
-      );
+
+      if (identifier) {
+        // Remove mode
+        await client.send('Page.removeScriptToEvaluateOnNewDocument', {
+          identifier,
+        });
+        context.untrackInjectedScript(identifier);
+        response.appendResponseLine(
+          `Injected script ${identifier} removed.`,
+        );
+      } else {
+        // Inject mode
+        const result = await client.send(
+          'Page.addScriptToEvaluateOnNewDocument',
+          {source: script!},
+        );
+        const id = result.identifier;
+        context.trackInjectedScript(id, script!);
+        response.appendResponseLine(
+          `Script injected. Identifier: ${id}`,
+        );
+        response.appendResponseLine(
+          'It will run before any page script on every load.',
+        );
+        response.appendResponseLine(
+          `To remove: inject_before_load(identifier: "${id}")`,
+        );
+      }
     } catch (error) {
       response.appendResponseLine(
         `Error: ${error instanceof Error ? error.message : String(error)}`,

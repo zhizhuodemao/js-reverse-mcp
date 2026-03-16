@@ -33,12 +33,18 @@ const FILTERABLE_RESOURCE_TYPES = [
 
 export const listNetworkRequests = defineTool({
   name: 'list_network_requests',
-  description: `List network requests for the currently selected page since the last navigation. Results are sorted newest-first. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate.`,
+  description: `List network requests for the currently selected page since the last navigation. Results are sorted newest-first. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate. Pass reqid to get a single request's full details.`,
   annotations: {
     category: ToolCategory.NETWORK,
     readOnlyHint: true,
   },
   schema: {
+    reqid: zod
+      .number()
+      .optional()
+      .describe(
+        'The reqid of a specific network request to get full details for. If omitted, lists all requests.',
+      ),
     pageSize: zod
       .number()
       .int()
@@ -76,6 +82,10 @@ export const listNetworkRequests = defineTool({
       ),
   },
   handler: async (request, response, context) => {
+    if (request.params.reqid !== undefined) {
+      response.attachNetworkRequest(request.params.reqid);
+      return;
+    }
     const data = await context.getDevToolsData();
     const reqid = data?.cdpRequestId
       ? context.resolveCdpRequestId(data.cdpRequestId)
@@ -88,39 +98,5 @@ export const listNetworkRequests = defineTool({
       includePreservedRequests: request.params.includePreservedRequests,
       networkRequestIdInDevToolsUI: reqid,
     });
-  },
-});
-
-export const getNetworkRequest = defineTool({
-  name: 'get_network_request',
-  description: `Gets a network request by an optional reqid, if omitted returns the currently selected request in the DevTools Network panel.`,
-  annotations: {
-    category: ToolCategory.NETWORK,
-    readOnlyHint: true,
-  },
-  schema: {
-    reqid: zod
-      .number()
-      .optional()
-      .describe(
-        'The reqid of the network request. If omitted returns the currently selected request in the DevTools Network panel.',
-      ),
-  },
-  handler: async (request, response, context) => {
-    if (request.params.reqid) {
-      response.attachNetworkRequest(request.params.reqid);
-    } else {
-      const data = await context.getDevToolsData();
-      const reqid = data?.cdpRequestId
-        ? context.resolveCdpRequestId(data.cdpRequestId)
-        : undefined;
-      if (reqid) {
-        response.attachNetworkRequest(reqid);
-      } else {
-        response.appendResponseLine(
-          `Nothing is currently selected in the DevTools Network panel.`,
-        );
-      }
-    }
   },
 });

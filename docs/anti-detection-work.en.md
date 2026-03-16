@@ -66,14 +66,14 @@ Anti-bot detection techniques include:
 
 Configuration aligned with Scrapling:
 
-| Layer               | Description                                           | Status |
-| ------------------- | ----------------------------------------------------- | ------ |
-| Patchright Engine   | Using patchright v1.51.1 / patchright-core v1.58.2    | ✅     |
-| Launch Arguments    | 60+ STEALTH_ARGS, aligned with Scrapling              | ✅     |
-| HARMFUL_ARGS Removal| --enable-automation and 4 other arguments             | ✅     |
-| Context Spoofing    | dark theme, isMobile=false, hasTouch=false            | ✅     |
-| navigator.webdriver | Patchright C++ patch active, value is false           | ✅     |
-| Bot Detection Test  | sannysoft.com all passed                              | ✅     |
+| Layer                | Description                                        | Status |
+| -------------------- | -------------------------------------------------- | ------ |
+| Patchright Engine    | Using patchright v1.51.1 / patchright-core v1.58.2 | ✅     |
+| Launch Arguments     | 60+ STEALTH_ARGS, aligned with Scrapling           | ✅     |
+| HARMFUL_ARGS Removal | --enable-automation and 4 other arguments          | ✅     |
+| Context Spoofing     | dark theme, isMobile=false, hasTouch=false         | ✅     |
+| navigator.webdriver  | Patchright C++ patch active, value is false        | ✅     |
+| Bot Detection Test   | sannysoft.com all passed                           | ✅     |
 
 Related files:
 
@@ -106,12 +106,12 @@ Changes:
 
 A core part of Patchright's anti-detection is **silent CDP**. However, the MCP Server originally enabled multiple CDP domains immediately at startup:
 
-| Collector          | CDP Domain                       | Original Init Timing   |
-| ------------------ | -------------------------------- | ---------------------- |
-| DebuggerContext    | `Debugger.enable`                | McpContext.#init()     |
-| NetworkCollector   | `Network.requestWillBeSent` listener | init() → addPage() |
-| ConsoleCollector   | `Audits.enable`                  | init() → addPage()    |
-| WebSocketCollector | Network.webSocket* listener      | init() → addPage()    |
+| Collector          | CDP Domain                           | Original Init Timing |
+| ------------------ | ------------------------------------ | -------------------- |
+| DebuggerContext    | `Debugger.enable`                    | McpContext.#init()   |
+| NetworkCollector   | `Network.requestWillBeSent` listener | init() → addPage()   |
+| ConsoleCollector   | `Audits.enable`                      | init() → addPage()   |
+| WebSocketCollector | Network.webSocket\* listener         | init() → addPage()   |
 
 **Fix:**
 
@@ -127,11 +127,11 @@ A core part of Patchright's anti-detection is **silent CDP**. However, the MCP S
 
 Even after deferring collectors, CDP leaks remained in the navigation tool call chain:
 
-| Leak Point                    | Location             | CDP Behavior                                                 |
-| ----------------------------- | -------------------- | ------------------------------------------------------------ |
-| `waitForEventsAfterAction()`  | pages.ts handler     | Creates CDP session + listens for `Page.frameStartedNavigating` |
+| Leak Point                    | Location                | CDP Behavior                                                       |
+| ----------------------------- | ----------------------- | ------------------------------------------------------------------ |
+| `waitForEventsAfterAction()`  | pages.ts handler        | Creates CDP session + listens for `Page.frameStartedNavigating`    |
 | `detectOpenDevToolsWindows()` | main.ts every tool call | Creates CDP session for devtools:// pages + `Target.getTargetInfo` |
-| `createPagesSnapshot()`       | McpResponse.handle() | Internally calls `detectOpenDevToolsWindows()`               |
+| `createPagesSnapshot()`       | McpResponse.handle()    | Internally calls `detectOpenDevToolsWindows()`                     |
 
 **Fix:**
 
@@ -187,11 +187,11 @@ Added `'notifications'` to the permissions array, changing `Notification.permiss
 
 These leaks also exist in Scrapling (Python Patchright) and don't affect passing mainstream anti-bot detection:
 
-| Detection Item                   | Current Value | Expected Value   | Notes                                              |
-| -------------------------------- | ------------- | ---------------- | -------------------------------------------------- |
-| `Error.stack` contains `UtilityScript` | Present | Should not exist | Patchright execution context leak, only visible during evaluate |
-| `chrome.runtime`                 | Missing       | Should have full object | Patchright C++ layer doesn't fully emulate    |
-| `chrome.app`                     | Missing       | Should have full object | Same as above                                 |
+| Detection Item                         | Current Value | Expected Value          | Notes                                                           |
+| -------------------------------------- | ------------- | ----------------------- | --------------------------------------------------------------- |
+| `Error.stack` contains `UtilityScript` | Present       | Should not exist        | Patchright execution context leak, only visible during evaluate |
+| `chrome.runtime`                       | Missing       | Should have full object | Patchright C++ layer doesn't fully emulate                      |
+| `chrome.app`                           | Missing       | Should have full object | Same as above                                                   |
 
 **Note: Do not attempt to fix these leaks with JS init scripts — it will backfire.**
 
@@ -224,14 +224,14 @@ list_network_requests()  # Returns all requests
 
 ## File Change List
 
-| File                      | Change Type | Description                                                                        |
-| ------------------------- | ----------- | ---------------------------------------------------------------------------------- |
-| `src/tools/pages.ts`      | Modified    | Added Google Referer; removed waitForEventsAfterAction                             |
-| `src/browser.ts`          | Modified    | viewport: null + conditional DPR; added notifications permission                   |
-| `src/stealth-args.ts`     | Modified    | Added --window-size=1920,1080                                                      |
+| File                      | Change Type | Description                                                                                          |
+| ------------------------- | ----------- | ---------------------------------------------------------------------------------------------------- |
+| `src/tools/pages.ts`      | Modified    | Added Google Referer; removed waitForEventsAfterAction                                               |
+| `src/browser.ts`          | Modified    | viewport: null + conditional DPR; added notifications permission                                     |
+| `src/stealth-args.ts`     | Modified    | Added --window-size=1920,1080                                                                        |
 | `src/McpContext.ts`       | Modified    | Lazy CDP collector initialization; createPagesSnapshot conditionally skips detectOpenDevToolsWindows |
-| `src/main.ts`             | Modified    | Navigation tools fully skip CDP operations; removed init script logic              |
-| `src/stealth-init.ts`     | **Deleted** | JS init script caused Google detection, removed                                    |
-| `src/cli.ts`              | Modified    | Removed --initScript CLI argument                                                  |
-| `test_raw_patchright.mjs` | Added       | Standalone test script, verified raw Patchright passes Zhihu                       |
-| `test_zhihu_search.mjs`   | Added       | Google search test script, verified no init script passes Google                   |
+| `src/main.ts`             | Modified    | Navigation tools fully skip CDP operations; removed init script logic                                |
+| `src/stealth-init.ts`     | **Deleted** | JS init script caused Google detection, removed                                                      |
+| `src/cli.ts`              | Modified    | Removed --initScript CLI argument                                                                    |
+| `test_raw_patchright.mjs` | Added       | Standalone test script, verified raw Patchright passes Zhihu                                         |
+| `test_zhihu_search.mjs`   | Added       | Google search test script, verified no init script passes Google                                     |

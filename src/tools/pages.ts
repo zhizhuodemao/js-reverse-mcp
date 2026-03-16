@@ -12,35 +12,29 @@ import {defineTool, timeoutSchema} from './ToolDefinition.js';
 // Default navigation timeout in milliseconds (10 seconds)
 const DEFAULT_NAV_TIMEOUT = 10000;
 
-
-export const listPages = defineTool({
-  name: 'list_pages',
-  description: `Get a list of pages open in the browser.`,
-  annotations: {
-    category: ToolCategory.NAVIGATION,
-    readOnlyHint: true,
-  },
-  schema: {},
-  handler: async (_request, response) => {
-    response.setIncludePages(true);
-  },
-});
-
 export const selectPage = defineTool({
   name: 'select_page',
-  description: `Select a page as a context for future tool calls.`,
+  description: `Lists all open pages in the browser. Pass pageIdx to select a page as context for future tool calls.`,
   annotations: {
     category: ToolCategory.NAVIGATION,
-    readOnlyHint: true,
+    readOnlyHint: false,
   },
   schema: {
     pageIdx: zod
       .number()
+      .optional()
       .describe(
-        'The index of the page to select. Call list_pages to list pages.',
+        'The index of the page to select. If omitted, lists all pages without changing selection.',
       ),
   },
   handler: async (request, response, context) => {
+    if (request.params.pageIdx === undefined) {
+      // List mode
+      response.setIncludePages(true);
+      return;
+    }
+
+    // Select mode
     const page = context.getPageByIdx(request.params.pageIdx);
     await page.bringToFront();
     context.selectPage(page);

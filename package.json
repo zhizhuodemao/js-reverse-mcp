@@ -1,6 +1,6 @@
 {
   "name": "js-reverse-mcp",
-  "version": "1.0.3",
+  "version": "1.1.0",
   "description": "JS reverse engineering MCP server with agent-first tool design and built-in anti-detection. 为 AI Agent 设计的 JS 逆向 MCP Server，内置反检测。",
   "keywords": [
     "mcp",

@@ -10,45 +10,6 @@ import {zod} from '../third_party/index.js';
 import {ToolCategory} from './categories.js';
 import {defineTool} from './ToolDefinition.js';
 
-/**
- * List all frames in the current page.
- */
-export const listFrames = defineTool({
-  name: 'list_frames',
-  description:
-    'Lists all frames (including iframes) in the current page as a tree. Shows frame index, name, and URL. Use select_frame to switch execution context to a specific frame.',
-  annotations: {
-    title: 'List Frames',
-    category: ToolCategory.DEBUGGING,
-    readOnlyHint: true,
-  },
-  schema: {},
-  handler: async (request, response, context) => {
-    const page = context.getSelectedPage();
-    const frames = page.frames();
-    const currentFrame = context.getSelectedFrame();
-
-    if (frames.length === 0) {
-      response.appendResponseLine('No frames found.');
-      return;
-    }
-
-    response.appendResponseLine(`Frames (${frames.length} total):\n`);
-
-    for (let i = 0; i < frames.length; i++) {
-      const frame = frames[i];
-      const isSelected = frame === currentFrame;
-      const indent = getFrameDepth(frame);
-      const prefix = '  '.repeat(indent);
-      const marker = isSelected ? ' [selected]' : '';
-      const name = frame.name() ? ` name="${frame.name()}"` : '';
-      response.appendResponseLine(
-        `${prefix}${i}: ${frame.url() || '(empty)'}${name}${marker}`,
-      );
-    }
-  },
-});
-
 function getFrameDepth(frame: Frame): number {
   let depth = 0;
   let parent = frame.parentFrame();
@@ -60,12 +21,12 @@ function getFrameDepth(frame: Frame): number {
 }
 
 /**
- * Select a frame for code execution.
+ * List frames or select a frame for code execution.
  */
 export const selectFrame = defineTool({
   name: 'select_frame',
   description:
-    'Selects a frame (by index from list_frames) as the execution context for evaluate_script, hook_function, inspect_object, and other tools that run JavaScript in the page.',
+    'Lists all frames (including iframes) in the current page. Pass frameIdx to switch execution context to that frame for evaluate_script and other tools.',
   annotations: {
     title: 'Select Frame',
     category: ToolCategory.DEBUGGING,
@@ -76,18 +37,45 @@ export const selectFrame = defineTool({
       .number()
       .int()
       .min(0)
+      .optional()
       .describe(
-        'The frame index (from list_frames). 0 = main frame.',
+        'The frame index to select. 0 = main frame. If omitted, lists all frames without changing selection.',
       ),
   },
   handler: async (request, response, context) => {
     const page = context.getSelectedPage();
     const frames = page.frames();
+    const currentFrame = context.getSelectedFrame();
+
+    if (request.params.frameIdx === undefined) {
+      // List mode
+      if (frames.length === 0) {
+        response.appendResponseLine('No frames found.');
+        return;
+      }
+
+      response.appendResponseLine(`Frames (${frames.length} total):\n`);
+
+      for (let i = 0; i < frames.length; i++) {
+        const frame = frames[i];
+        const isSelected = frame === currentFrame;
+        const indent = getFrameDepth(frame);
+        const prefix = '  '.repeat(indent);
+        const marker = isSelected ? ' [selected]' : '';
+        const name = frame.name() ? ` name="${frame.name()}"` : '';
+        response.appendResponseLine(
+          `${prefix}${i}: ${frame.url() || '(empty)'}${name}${marker}`,
+        );
+      }
+      return;
+    }
+
+    // Select mode
     const {frameIdx} = request.params;
 
     if (frameIdx >= frames.length) {
       response.appendResponseLine(
-        `Invalid frame index ${frameIdx}. Use list_frames to see available frames (0-${frames.length - 1}).`,
+        `Invalid frame index ${frameIdx}. Available: 0-${frames.length - 1}.`,
       );
       return;
     }
