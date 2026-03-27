@@ -395,6 +395,9 @@ export class McpContext implements Context {
   }
 
   selectPage(newPage: Page): void {
+    if (!newPage) {
+      throw new Error('Cannot select an undefined page.');
+    }
     const oldPage = this.#selectedPage;
     if (oldPage) {
       oldPage.off('dialog', this.#dialogHandler);
@@ -458,6 +461,16 @@ export class McpContext implements Context {
         !page.url().startsWith('devtools://')
       );
     });
+
+    if (this.#pages.length === 0) {
+      if (this.#selectedPage) {
+        this.#selectedPage.off('dialog', this.#dialogHandler);
+      }
+      this.#selectedPage = undefined;
+      this.#selectedFrame = undefined;
+      this.#pageToDevToolsPage = new Map();
+      return this.#pages;
+    }
 
     if (!this.#selectedPage || this.#pages.indexOf(this.#selectedPage) === -1) {
       this.selectPage(this.#pages[0]);
