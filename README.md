@@ -62,7 +62,7 @@ code --add-mcp '{"name":"js-reverse","command":"npx","args":["js-reverse-mcp"]}'
 ## Local Installation (Alternative)
 
 ```bash
-git clone https://github.com/nicecaesar/js-reverse-mcp.git
+git clone https://github.com/zhizhuodemao/js-reverse-mcp.git
 cd js-reverse-mcp
 npm install
 npm run build
