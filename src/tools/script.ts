@@ -64,14 +64,102 @@ Example with arguments: \`(el) => {
         'When paused at a breakpoint, which call frame to evaluate in (0 = top frame). ' +
           'If omitted, uses the top frame. Use get_paused_info to see available frames.',
       ),
+    outputFile: zod
+      .string()
+      .optional()
+      .describe(
+        'If provided, saves the evaluation result to this local file path instead of returning it in the chat. Useful for dumping large data, ArrayBuffer, or Uint8Array memory regions. The script should return the data you want to dump.',
+      ),
   },
   handler: async (request, response, context) => {
-    // When paused at a breakpoint, evaluate in the paused call frame context
-    // to avoid a 30s timeout that would confuse the agent.
+    const {function: fnString, mainWorld, frameIndex, outputFile} = request.params;
+
+    const wrapResultSync = (fn: string) => `(() => {
+      try {
+        const result = (${fn})();
+        if (result instanceof ArrayBuffer || ArrayBuffer.isView(result)) {
+          const buffer = result.buffer || result;
+          const bytes = new Uint8Array(buffer, result.byteOffset || 0, result.byteLength || result.length);
+          let binary = '';
+          const chunkSize = 8192;
+          for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
+          }
+          return JSON.stringify({ type: 'base64', data: btoa(binary) });
+        }
+        return JSON.stringify({ type: 'json', data: JSON.stringify(result) });
+      } catch (e) {
+        return JSON.stringify({ type: 'error', data: e.message || String(e) });
+      }
+    })()`;
+
+    const wrapResultAsync = (fn: string) => `async () => {
+      try {
+        const result = await (${fn})();
+        if (result instanceof ArrayBuffer || ArrayBuffer.isView(result)) {
+          const buffer = result.buffer || result;
+          const bytes = new Uint8Array(buffer, result.byteOffset || 0, result.byteLength || result.length);
+          if (typeof FileReader !== 'undefined' && typeof Blob !== 'undefined') {
+            const blob = new Blob([bytes]);
+            return await new Promise((resolve) => {
+              const reader = new FileReader();
+              reader.onload = () => resolve(JSON.stringify({ type: 'base64', data: reader.result.split(',')[1] }));
+              reader.readAsDataURL(blob);
+            });
+          } else {
+            let binary = '';
+            const chunkSize = 8192;
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+              binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
+            }
+            return JSON.stringify({ type: 'base64', data: btoa(binary) });
+          }
+        }
+        return JSON.stringify({ type: 'json', data: JSON.stringify(result) });
+      } catch (e) {
+        return JSON.stringify({ type: 'error', data: e.message || String(e) });
+      }
+    }`;
+
+    const handleEvalResult = async (rawString: string) => {
+      let parsed: { type: string, data: string };
+      try {
+        parsed = JSON.parse(rawString);
+      } catch {
+        parsed = { type: 'json', data: rawString };
+      }
+      
+      if (parsed.type === 'error') {
+        throw new Error(`Script evaluation error: ${parsed.data}`);
+      }
+
+      if (outputFile) {
+        if (parsed.type === 'base64') {
+          const binaryData = Buffer.from(parsed.data, 'base64');
+          const res = await context.saveFile(binaryData, outputFile);
+          response.appendResponseLine(`Saved binary memory dump to ${res.filename} (${binaryData.length} bytes).`);
+        } else {
+          const textData = new TextEncoder().encode(parsed.data === undefined ? 'undefined' : parsed.data);
+          const res = await context.saveFile(textData, outputFile);
+          response.appendResponseLine(`Saved JSON result to ${res.filename} (${textData.length} bytes).`);
+        }
+        return;
+      }
+
+      response.appendResponseLine('Script ran on page and returned:');
+      if (parsed.type === 'base64') {
+        response.appendResponseLine(`[Binary Data: ${Buffer.from(parsed.data, 'base64').length} bytes. Use outputFile to save to disk.]`);
+      } else {
+        response.appendResponseLine('```json');
+        response.appendResponseLine(`${parsed.data ?? 'undefined'}`);
+        response.appendResponseLine('```');
+      }
+    };
+
     const debugger_ = context.debuggerContext;
     if (debugger_.isEnabled() && debugger_.isPaused()) {
       const pausedState = debugger_.getPausedState();
-      const frameIdx = request.params.frameIndex ?? 0;
+      const frameIdx = frameIndex ?? 0;
       if (frameIdx < 0 || frameIdx >= pausedState.callFrames.length) {
         throw new Error(
           `frameIndex ${frameIdx} is out of range (0-${pausedState.callFrames.length - 1})`,
@@ -79,10 +167,9 @@ Example with arguments: \`(el) => {
       }
       const callFrameId = pausedState.callFrames[frameIdx]?.callFrameId;
       if (callFrameId) {
-        const expression = `JSON.stringify((${request.params.function})())`;
         const result = await debugger_.evaluateOnCallFrame(
           callFrameId,
-          expression,
+          wrapResultSync(fnString),
           {returnByValue: true},
         );
 
@@ -93,31 +180,12 @@ Example with arguments: \`(el) => {
           throw new Error(`Script evaluation error: ${errMsg}`);
         }
 
-        const value = result.result.value as string | undefined;
-        response.appendResponseLine(
-          'Script ran on page (paused context) and returned:',
-        );
-        response.appendResponseLine('```json');
-        response.appendResponseLine(`${value ?? 'undefined'}`);
-        response.appendResponseLine('```');
+        await handleEvalResult(result.result.value as string);
         return;
       }
     }
 
-    if (request.params.mainWorld) {
-      // Main world execution via script tag injection + DOM bridge.
-      //
-      // Why: Patchright (our browser automation library) deliberately runs
-      // frame.evaluate() in an isolated ExecutionContext by default. This is
-      // its core anti-detection mechanism — it avoids calling CDP
-      // Runtime.enable, which all major anti-bot systems (Cloudflare,
-      // DataDome, ByteDance bdms, etc.) can detect.
-      //
-      // The trade-off is that isolated contexts cannot access page-defined
-      // globals like window.bdms or window.app. To work around this without
-      // breaking stealth, we inject a <script> tag (which always executes in
-      // the main world) and pass the result back via a DOM attribute (the DOM
-      // is shared between worlds).
+    if (mainWorld) {
       const frame = context.getSelectedFrame();
       const bridgeId = `__mcp_bridge_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       const result = await withTimeout(
@@ -129,11 +197,11 @@ Example with arguments: \`(el) => {
 
           const script = document.createElement('script');
           script.textContent = `
-            (function() {
+            (async function() {
               var el = document.getElementById(${JSON.stringify(id)});
               try {
-                var result = (${fn})();
-                el.setAttribute('data-result', JSON.stringify(result));
+                var result = await (${fn})();
+                el.setAttribute('data-result', result);
               } catch(e) {
                 el.setAttribute('data-error', e.message || String(e));
               }
@@ -142,34 +210,38 @@ Example with arguments: \`(el) => {
           document.documentElement.appendChild(script);
           script.remove();
 
-          // Read result from the DOM bridge
-          const data = el.getAttribute('data-result');
-          const error = el.getAttribute('data-error');
-          el.remove();
-
-          if (error) {
-            throw new Error(error);
-          }
-          return data ?? 'undefined';
-        }, {fn: request.params.function, id: bridgeId}),
+          // Wait for result
+          return new Promise<string>((resolve, reject) => {
+            const check = () => {
+              if (!document.getElementById(id)) return reject(new Error('Bridge element removed'));
+              const err = el.getAttribute('data-error');
+              if (err) {
+                el.remove();
+                return reject(new Error(err));
+              }
+              const res = el.getAttribute('data-result');
+              if (res !== null) {
+                el.remove();
+                return resolve(res);
+              }
+              setTimeout(check, 50);
+            };
+            check();
+          });
+        }, {fn: wrapResultAsync(fnString), id: bridgeId}),
         DEFAULT_SCRIPT_TIMEOUT,
         'Script evaluation timed out',
       );
 
-      response.appendResponseLine(
-        'Script ran on page (main world) and returned:',
-      );
-      response.appendResponseLine('```json');
-      response.appendResponseLine(`${result}`);
-      response.appendResponseLine('```');
+      await handleEvalResult(result);
       return;
     }
 
-    let fn: JSHandle<unknown> | undefined;
+    let fnHandle: JSHandle<unknown> | undefined;
     try {
       const frame = context.getSelectedFrame();
-      fn = await withTimeout(
-        frame.evaluateHandle(`(${request.params.function})`),
+      fnHandle = await withTimeout(
+        frame.evaluateHandle(`(${wrapResultAsync(fnString)})`),
         DEFAULT_SCRIPT_TIMEOUT,
         'Script evaluation timed out',
       );
@@ -177,19 +249,16 @@ Example with arguments: \`(el) => {
         const result = await withTimeout(
           frame.evaluate(async fn => {
             // @ts-expect-error no types.
-            return JSON.stringify(await fn());
-          }, fn),
+            return await fn();
+          }, fnHandle),
           DEFAULT_SCRIPT_TIMEOUT,
           'Script execution timed out',
         );
-        response.appendResponseLine('Script ran on page and returned:');
-        response.appendResponseLine('```json');
-        response.appendResponseLine(`${result}`);
-        response.appendResponseLine('```');
+        await handleEvalResult(result as string);
       });
     } finally {
-      if (fn) {
-        void fn.dispose();
+      if (fnHandle) {
+        void fnHandle.dispose();
       }
     }
   },

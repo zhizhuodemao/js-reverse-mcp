@@ -551,7 +551,7 @@ export class DebuggerContext {
    */
   async getScriptSourceByUrl(
     url: string,
-  ): Promise<{source: string; script: ScriptInfo}> {
+  ): Promise<{source: string; bytecode?: string; script: ScriptInfo}> {
     if (!this.#client) {
       throw new Error('Debugger not enabled');
     }
@@ -572,23 +572,49 @@ export class DebuggerContext {
 
     // Pick the last script (most recent parse)
     const script = scripts[scripts.length - 1];
-    const source = await this.getScriptSource(script.scriptId);
-    return {source, script};
+    const result = await this.getScriptSource(script.scriptId);
+    return {source: result.scriptSource, bytecode: result.bytecode, script};
   }
 
   /**
    * Get the source code of a script.
    */
-  async getScriptSource(scriptId: string): Promise<string> {
+  async getScriptSource(
+    scriptId: string,
+  ): Promise<{scriptSource: string; bytecode?: string}> {
     if (!this.#client) {
       throw new Error('Debugger not enabled');
     }
 
-    const result = await this.#client.send('Debugger.getScriptSource', {
-      scriptId,
-    });
+    const script = this.#scripts.get(scriptId);
 
-    return result.scriptSource;
+    try {
+      const result = await this.#client.send('Debugger.getScriptSource', {
+        scriptId,
+      });
+
+      return {
+        scriptSource: result.scriptSource || '',
+        bytecode: result.bytecode,
+      };
+    } catch (error) {
+      if (script?.url.startsWith('data:')) {
+        const parts = script.url.split(',');
+        if (parts.length > 1) {
+          const isBase64 = parts[0].endsWith(';base64');
+          const data = parts.slice(1).join(',');
+          if (isBase64) {
+            if (script.url.includes('wasm')) {
+              return {scriptSource: '', bytecode: data};
+            }
+            return {scriptSource: Buffer.from(data, 'base64').toString('utf-8')};
+          } else {
+            return {scriptSource: decodeURIComponent(data)};
+          }
+        }
+      }
+      throw error;
+    }
   }
 
   /**

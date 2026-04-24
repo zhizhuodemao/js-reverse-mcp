@@ -57,7 +57,8 @@ async function appendStepSummary(
 
   // Show a small code snippet around the exact column position
   try {
-    const source = await debugger_.getScriptSource(frame.location.scriptId);
+    const result = await debugger_.getScriptSource(frame.location.scriptId);
+    const source = result.scriptSource;
     const lines = source.split('\n');
     const lineContent = lines[frame.location.lineNumber];
     if (lineContent) {
@@ -128,7 +129,13 @@ export const listScripts = defineTool({
 
     for (const script of displayScripts) {
       response.appendResponseLine(`- ID: ${script.scriptId}`);
-      response.appendResponseLine(`  URL: ${script.url || '(inline/eval)'}`);
+      let displayUrl = script.url || '(inline/eval)';
+      if (displayUrl.startsWith('data:') && displayUrl.length > 100) {
+        displayUrl = displayUrl.substring(0, 100) + '... (truncated)';
+      } else if (displayUrl.length > 200) {
+        displayUrl = displayUrl.substring(0, 200) + '... (truncated)';
+      }
+      response.appendResponseLine(`  URL: ${displayUrl}`);
       if (script.sourceMapURL) {
         response.appendResponseLine(`  SourceMap: ${script.sourceMapURL}`);
       }
@@ -210,19 +217,31 @@ export const getScriptSource = defineTool({
 
     try {
       let source: string;
+      let bytecode: string | undefined;
       if (url) {
         const result = await debugger_.getScriptSourceByUrl(url);
         source = result.source;
+        bytecode = result.bytecode;
         scriptId = result.script.scriptId;
         response.appendResponseLine(
           `Resolved URL to script ${scriptId} (${result.script.url}).\n`,
         );
       } else {
-        source = await debugger_.getScriptSource(scriptId!);
+        const result = await debugger_.getScriptSource(scriptId!);
+        source = result.scriptSource;
+        bytecode = result.bytecode;
       }
 
-      if (!source) {
+      if (!source && !bytecode) {
         response.appendResponseLine(`No source found for script ${scriptId}.`);
+        return;
+      }
+
+      if (bytecode) {
+        const binaryData = Buffer.from(bytecode, 'base64');
+        response.appendResponseLine(
+          `Script ${scriptId} is a WebAssembly binary file (${binaryData.length} bytes). Please use save_script_source to download it as a .wasm file.`,
+        );
         return;
       }
 
@@ -354,28 +373,40 @@ export const saveScriptSource = defineTool({
 
     try {
       let source: string;
+      let bytecode: string | undefined;
       let resolvedId = scriptId;
       if (url) {
         const result = await debugger_.getScriptSourceByUrl(url);
         source = result.source;
+        bytecode = result.bytecode;
         resolvedId = result.script.scriptId;
         response.appendResponseLine(
           `Resolved URL to script ${resolvedId} (${result.script.url}).`,
         );
       } else {
-        source = await debugger_.getScriptSource(scriptId!);
+        const result = await debugger_.getScriptSource(scriptId!);
+        source = result.scriptSource;
+        bytecode = result.bytecode;
       }
 
-      if (!source) {
+      if (!source && !bytecode) {
         response.appendResponseLine(`No source found for script ${resolvedId}.`);
         return;
       }
 
-      const data = new TextEncoder().encode(source);
-      const result = await context.saveFile(data, filePath);
-      response.appendResponseLine(
-        `Saved script source to ${result.filename} (${source.length} chars).`,
-      );
+      if (bytecode) {
+        const binaryData = Buffer.from(bytecode, 'base64');
+        const result = await context.saveFile(binaryData, filePath);
+        response.appendResponseLine(
+          `Saved WASM script source to ${result.filename} (${binaryData.length} bytes).`,
+        );
+      } else {
+        const data = new TextEncoder().encode(source);
+        const result = await context.saveFile(data, filePath);
+        response.appendResponseLine(
+          `Saved script source to ${result.filename} (${source.length} chars).`,
+        );
+      }
     } catch (error) {
       response.appendResponseLine(
         `Error saving script source: ${error instanceof Error ? error.message : String(error)}`,
@@ -1154,7 +1185,8 @@ export const setBreakpointOnText = defineTool({
       }
 
       // Step 2: Get exact column position by searching in the script source
-      const source = await debugger_.getScriptSource(match.scriptId);
+      const result = await debugger_.getScriptSource(match.scriptId);
+      const source = result.scriptSource;
       let columnNumber = 0;
 
       // For minified files, find exact column
@@ -1389,7 +1421,8 @@ export const traceFunction = defineTool({
       }
 
       // Get exact column position
-      const source = await debugger_.getScriptSource(match.scriptId);
+      const result = await debugger_.getScriptSource(match.scriptId);
+      const source = result.scriptSource;
       const lines = source.split('\n');
       let columnNumber = 0;
 
