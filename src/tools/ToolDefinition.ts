@@ -156,18 +156,6 @@ export type Context = Readonly<{
    */
   getCachedTrafficSummary(wsid: number): TrafficSummary | undefined;
   /**
-   * Track an injected script for the current page.
-   */
-  trackInjectedScript(identifier: string, source: string): void;
-  /**
-   * Untrack an injected script for the current page.
-   */
-  untrackInjectedScript(identifier: string): boolean;
-  /**
-   * Get all injected script identifiers for the current page.
-   */
-  getInjectedScriptIds(): string[];
-  /**
    * Get the currently selected frame (or main frame if none selected).
    */
   getSelectedFrame(): Frame;

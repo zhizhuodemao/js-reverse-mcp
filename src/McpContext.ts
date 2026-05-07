@@ -91,7 +91,6 @@ export class McpContext implements Context {
 
   #traceResults: TraceResult[] = [];
   #trafficSummaryCache = new Map<number, TrafficSummary>();
-  #injectedScriptsByPage = new WeakMap<Page, Map<string, string>>();
 
   #navigationTimeout = NAVIGATION_TIMEOUT;
   #options: McpContextOptions;
@@ -590,10 +589,17 @@ export class McpContext implements Context {
     cpuMultiplier: number,
     networkMultiplier: number,
   ) {
-    return WaitForHelper.create(page, this.sessionProvider, cpuMultiplier, networkMultiplier);
+    return WaitForHelper.create(
+      page,
+      this.sessionProvider,
+      cpuMultiplier,
+      networkMultiplier,
+    );
   }
 
-  async waitForEventsAfterAction(action: () => Promise<unknown>): Promise<void> {
+  async waitForEventsAfterAction(
+    action: () => Promise<unknown>,
+  ): Promise<void> {
     const page = this.getSelectedPage();
     const cpuMultiplier = this.getCpuThrottlingRate();
     const networkMultiplier = getNetworkMultiplierFromString(
@@ -663,30 +669,6 @@ export class McpContext implements Context {
    */
   getCachedTrafficSummary(wsid: number): TrafficSummary | undefined {
     return this.#trafficSummaryCache.get(wsid);
-  }
-
-  trackInjectedScript(identifier: string, source: string): void {
-    const page = this.getSelectedPage();
-    let map = this.#injectedScriptsByPage.get(page);
-    if (!map) {
-      map = new Map();
-      this.#injectedScriptsByPage.set(page, map);
-    }
-    map.set(identifier, source);
-  }
-
-  untrackInjectedScript(identifier: string): boolean {
-    const page = this.getSelectedPage();
-    const map = this.#injectedScriptsByPage.get(page);
-    if (!map) return false;
-    return map.delete(identifier);
-  }
-
-  getInjectedScriptIds(): string[] {
-    const page = this.getSelectedPage();
-    const map = this.#injectedScriptsByPage.get(page);
-    if (!map) return [];
-    return [...map.keys()];
   }
 
   async waitForTextOnPage({

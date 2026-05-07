@@ -11,11 +11,9 @@ Built on the [Patchright](https://github.com/nicecaesar/patchright) anti-detecti
 - **Anti-detection browser**: Based on Patchright (Playwright anti-detection fork), 60+ stealth launch arguments, bypasses mainstream anti-bot systems
 - **Script analysis**: List all loaded JS scripts, search code, get/save source code
 - **Breakpoint debugging**: Set/remove breakpoints, conditional breakpoints, precise positioning in minified code
-- **Function tracing**: Trace any function (including module-internal functions) via logpoints
 - **Execution control**: Pause/resume execution, step debugging (over/into/out) with source context
 - **Runtime inspection**: Evaluate expressions at breakpoints, inspect scope variables
 - **Network analysis**: View request initiator call stacks, set XHR breakpoints, WebSocket message analysis
-- **Script injection**: Inject scripts that run before page load for interception and instrumentation
 
 ## Requirements
 
@@ -87,69 +85,62 @@ js-reverse-mcp includes multi-layered anti-detection measures to work on sites w
 
 ### Anti-Detection Architecture
 
-| Layer | Description |
-|-------|-------------|
-| Patchright Engine | C++ level anti-detection patches, removes `navigator.webdriver`, avoids `Runtime.enable` leaks |
-| 60+ Stealth Args | Removes automation signatures, bypasses headless detection, GPU/network/behavior fingerprint spoofing |
-| Harmful Args Removal | Excludes `--enable-automation` and 4 other default Playwright arguments |
-| Silent CDP Navigation | Navigation tools don't activate CDP domains, captures requests only through Playwright-level listeners, preventing anti-bot scripts from detecting debugging protocol activity |
-| Google Referer Spoofing | All navigations automatically include `referer: https://www.google.com/` |
-| Persistent Login State | Uses persistent user-data-dir by default, login state preserved across sessions |
+| Layer                   | Description                                                                                                                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Patchright Engine       | C++ level anti-detection patches, removes `navigator.webdriver`, avoids `Runtime.enable` leaks                                                                                 |
+| 60+ Stealth Args        | Removes automation signatures, bypasses headless detection, GPU/network/behavior fingerprint spoofing                                                                          |
+| Harmful Args Removal    | Excludes `--enable-automation` and 4 other default Playwright arguments                                                                                                        |
+| Silent CDP Navigation   | Navigation tools don't activate CDP domains, captures requests only through Playwright-level listeners, preventing anti-bot scripts from detecting debugging protocol activity |
+| Google Referer Spoofing | All navigations automatically include `referer: https://www.google.com/`                                                                                                       |
+| Persistent Login State  | Uses persistent user-data-dir by default, login state preserved across sessions                                                                                                |
 
-## Tools (23)
+## Tools (21)
 
 ### Page & Navigation
 
-| Tool              | Description                                                    |
-| ----------------- | -------------------------------------------------------------- |
-| `select_page`     | List open pages, or select one by index as debugging context   |
-| `new_page`        | Create a new page and navigate to URL                          |
-| `navigate_page`   | Navigate, go back, forward, or reload                          |
-| `select_frame`    | List all frames (iframes), or select one as execution context  |
-| `take_screenshot` | Take a page screenshot                                         |
+| Tool              | Description                                                   |
+| ----------------- | ------------------------------------------------------------- |
+| `select_page`     | List open pages, or select one by index as debugging context  |
+| `new_page`        | Create a new page and navigate to URL                         |
+| `navigate_page`   | Navigate, go back, forward, or reload                         |
+| `select_frame`    | List all frames (iframes), or select one as execution context |
+| `take_screenshot` | Take a page screenshot                                        |
 
 ### Script Analysis
 
-| Tool                | Description                                                    |
-| ------------------- | -------------------------------------------------------------- |
-| `list_scripts`      | List all JavaScript scripts loaded in the page                 |
-| `get_script_source` | Get script source snippet by line range or character offset    |
-| `save_script_source`| Save full script source to a local file (for large/minified/WASM files) |
-| `search_in_sources` | Search for strings or regex patterns across all scripts        |
+| Tool                 | Description                                                             |
+| -------------------- | ----------------------------------------------------------------------- |
+| `list_scripts`       | List all JavaScript scripts loaded in the page                          |
+| `get_script_source`  | Get script source snippet by line range or character offset             |
+| `save_script_source` | Save full script source to a local file (for large/minified/WASM files) |
+| `search_in_sources`  | Search for strings or regex patterns across all scripts                 |
 
 ### Breakpoint & Execution Control
 
-| Tool                     | Description                                                |
-| ------------------------ | ---------------------------------------------------------- |
+| Tool                     | Description                                                      |
+| ------------------------ | ---------------------------------------------------------------- |
 | `set_breakpoint_on_text` | Set breakpoint by searching code text (works with minified code) |
-| `break_on_xhr`           | Set XHR/Fetch breakpoint by URL pattern                    |
-| `remove_breakpoint`      | Remove breakpoint(s) by ID, URL, or all; auto-resumes     |
-| `list_breakpoints`       | List all active breakpoints                                |
-| `get_paused_info`        | Get paused state, call stack and scope variables           |
-| `pause_or_resume`        | Toggle pause/resume execution                              |
-| `step`                   | Step over, into, or out with source context in response    |
-
-### Function Tracing & Injection
-
-| Tool                | Description                                                           |
-| ------------------- | --------------------------------------------------------------------- |
-| `trace_function`    | Trace any function call (including bundled internals) via logpoints   |
-| `inject_before_load`| Inject or remove a script that runs before page load                  |
+| `break_on_xhr`           | Set XHR/Fetch breakpoint by URL pattern                          |
+| `remove_breakpoint`      | Remove breakpoint(s) by ID, URL, or all; auto-resumes            |
+| `list_breakpoints`       | List all active breakpoints                                      |
+| `get_paused_info`        | Get paused state, call stack and scope variables                 |
+| `pause_or_resume`        | Toggle pause/resume execution                                    |
+| `step`                   | Step over, into, or out with source context in response          |
 
 ### Network & WebSocket
 
-| Tool                     | Description                                    |
-| ------------------------ | ---------------------------------------------- |
-| `list_network_requests`  | List network requests, or get one by reqid     |
-| `get_request_initiator`  | Get JavaScript call stack for a network request|
+| Tool                     | Description                                                          |
+| ------------------------ | -------------------------------------------------------------------- |
+| `list_network_requests`  | List network requests, or get one by reqid                           |
+| `get_request_initiator`  | Get JavaScript call stack for a network request                      |
 | `get_websocket_messages` | List WebSocket connections, analyze messages, or get message details |
 
 ### Inspection
 
-| Tool                    | Description                                    |
-| ----------------------- | ---------------------------------------------- |
+| Tool                    | Description                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------ |
 | `evaluate_script`       | Execute JavaScript in the page (supports paused context, main world, and saving results/binary data to file) |
-| `list_console_messages` | List console messages, or get one by msgid     |
+| `list_console_messages` | List console messages, or get one by msgid                                                                   |
 
 ## Usage Examples
 
@@ -179,13 +170,6 @@ Set a breakpoint at the entry of the encryption function
 Trigger an action on the page, then inspect arguments, call stack and scope variables when the breakpoint hits
 ```
 
-### Trace Module-Internal Functions
-
-```
-Use trace_function to trace the webpack-bundled internal function "encryptData",
-view arguments of each call without setting breakpoints
-```
-
 ### WebSocket Protocol Analysis
 
 ```
@@ -194,21 +178,21 @@ List WebSocket connections, analyze message patterns, view messages of specific 
 
 ## Configuration Options
 
-| Option                 | Description                                | Default    |
-| ---------------------- | ------------------------------------------ | ---------- |
-| `--browserUrl, -u`     | Connect to a running Chrome instance       | -          |
-| `--wsEndpoint, -w`     | WebSocket endpoint connection              | -          |
-| `--headless`           | Run in headless mode                       | false      |
-| `--executablePath, -e` | Custom Chrome executable path              | -          |
-| `--isolated`           | Use temporary user data directory (fresh each time) | false |
-| `--channel`            | Chrome channel: stable, canary, beta, dev  | stable     |
-| `--viewport`           | Initial viewport size, e.g. `1280x720`    | real size  |
-| `--hideCanvas`         | Enable Canvas fingerprint noise            | false      |
-| `--blockWebrtc`        | Block WebRTC to prevent real IP leaks      | false      |
-| `--disableWebgl`       | Disable WebGL to prevent GPU fingerprinting | false     |
-| `--noStealth`          | Disable stealth launch arguments (for debugging) | false |
-| `--proxyServer`        | Proxy server configuration                 | -          |
-| `--logFile`            | Debug log file path                        | -          |
+| Option                 | Description                                         | Default   |
+| ---------------------- | --------------------------------------------------- | --------- |
+| `--browserUrl, -u`     | Connect to a running Chrome instance                | -         |
+| `--wsEndpoint, -w`     | WebSocket endpoint connection                       | -         |
+| `--headless`           | Run in headless mode                                | false     |
+| `--executablePath, -e` | Custom Chrome executable path                       | -         |
+| `--isolated`           | Use temporary user data directory (fresh each time) | false     |
+| `--channel`            | Chrome channel: stable, canary, beta, dev           | stable    |
+| `--viewport`           | Initial viewport size, e.g. `1280x720`              | real size |
+| `--hideCanvas`         | Enable Canvas fingerprint noise                     | false     |
+| `--blockWebrtc`        | Block WebRTC to prevent real IP leaks               | false     |
+| `--disableWebgl`       | Disable WebGL to prevent GPU fingerprinting         | false     |
+| `--noStealth`          | Disable stealth launch arguments (for debugging)    | false     |
+| `--proxyServer`        | Proxy server configuration                          | -         |
+| `--logFile`            | Debug log file path                                 | -         |
 
 ### Example Configurations
 
@@ -219,11 +203,7 @@ List WebSocket connections, analyze message patterns, view messages of specific 
   "mcpServers": {
     "js-reverse": {
       "command": "npx",
-      "args": [
-        "js-reverse-mcp",
-        "--hideCanvas",
-        "--blockWebrtc"
-      ]
+      "args": ["js-reverse-mcp", "--hideCanvas", "--blockWebrtc"]
     }
   }
 }
@@ -236,10 +216,7 @@ List WebSocket connections, analyze message patterns, view messages of specific 
   "mcpServers": {
     "js-reverse": {
       "command": "npx",
-      "args": [
-        "js-reverse-mcp",
-        "--isolated"
-      ]
+      "args": ["js-reverse-mcp", "--isolated"]
     }
   }
 }
@@ -268,10 +245,7 @@ List WebSocket connections, analyze message patterns, view messages of specific 
   "mcpServers": {
     "js-reverse": {
       "command": "npx",
-      "args": [
-        "js-reverse-mcp",
-        "--browser-url=http://127.0.0.1:9222"
-      ]
+      "args": ["js-reverse-mcp", "--browser-url=http://127.0.0.1:9222"]
     }
   }
 }

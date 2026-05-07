@@ -14,12 +14,11 @@
   - [`list_console_messages`](#list_console_messages)
   - [`select_frame`](#select_frame)
   - [`take_screenshot`](#take_screenshot)
-- **[JS Reverse Engineering](#js-reverse-engineering)** (14 tools)
+- **[JS Reverse Engineering](#js-reverse-engineering)** (12 tools)
   - [`break_on_xhr`](#break_on_xhr)
   - [`get_paused_info`](#get_paused_info)
   - [`get_request_initiator`](#get_request_initiator)
   - [`get_script_source`](#get_script_source)
-  - [`inject_before_load`](#inject_before_load)
   - [`list_breakpoints`](#list_breakpoints)
   - [`list_scripts`](#list_scripts)
   - [`pause_or_resume`](#pause_or_resume)
@@ -28,7 +27,6 @@
   - [`search_in_sources`](#search_in_sources)
   - [`set_breakpoint_on_text`](#set_breakpoint_on_text)
   - [`step`](#step)
-  - [`trace_function`](#trace_function)
 
 ## Navigation automation
 
@@ -123,6 +121,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 }`
 
 - **mainWorld** (boolean) _(optional)_: Execute the function in the page main world instead of the default isolated context. Use this when you need to access page-defined globals (e.g. window.bdms, window.app). The function must be synchronous and return a JSON-serializable value.
+- **outputFile** (string) _(optional)_: If provided, saves the evaluation result to this local file path instead of returning it in the chat. Useful for dumping large data, ArrayBuffer, or Uint8Array memory regions. The script should return the data you want to dump.
 
 ---
 
@@ -199,7 +198,7 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ### `get_script_source`
 
-**Description:** Gets a small snippet of a JavaScript script source by URL (recommended) or script ID. Supports line range (for normal files) or character offset (for minified single-line files). Prefer using url over scriptId — URLs remain stable across page navigations while script IDs become invalid after reload. IMPORTANT: This tool is designed for reading small code regions (e.g. around breakpoints or search results). You MUST always specify startLine/endLine or offset/length. To read an entire script file, use curl to download it by its URL instead.
+**Description:** Gets a small snippet of a JavaScript script source by URL (recommended) or script ID. Supports line range (for normal files) or character offset (for minified single-line files). Prefer using url over scriptId — URLs remain stable across page navigations while script IDs become invalid after reload. IMPORTANT: This tool is designed for reading small code regions (e.g. around breakpoints or search results). You MUST always specify startLine/endLine or offset/length. To read an entire script file (especially minified ones), use [`save_script_source`](#save_script_source) instead — it downloads the full source and auto-formats minified code for readability. WASM scripts cannot be read by this tool — it will reject them and direct you to [`save_script_source`](#save_script_source).
 
 **Parameters:**
 
@@ -209,17 +208,6 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 - **scriptId** (string) _(optional)_: Script ID (from [`list_scripts`](#list_scripts)). Becomes invalid after page navigation — prefer url instead.
 - **startLine** (integer) _(optional)_: Start line number (1-based). Use for multi-line files.
 - **url** (string) _(optional)_: Script URL (preferred). Stable across page navigations. Exact match first, then substring match.
-
----
-
-### `inject_before_load`
-
-**Description:** Injects a JavaScript script that runs before any page script on every page load. Pass script to inject, or pass identifier to remove a previously injected script.
-
-**Parameters:**
-
-- **identifier** (string) _(optional)_: The identifier of a previously injected script to remove.
-- **script** (string) _(optional)_: JavaScript code to inject. Runs before any page script. Example: Object.defineProperty(window, "h5sign", { set(v) { debugger; this.\_h5sign = v; }, get() { return this.\_h5sign; } })
 
 ---
 
@@ -262,11 +250,12 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 
 ### `save_script_source`
 
-**Description:** Saves the full source code of a JavaScript script to a local file. Use this to download complete script sources for offline analysis, especially for large or minified files that are too big to view inline with [`get_script_source`](#get_script_source).
+**Description:** Saves the full source code of a JavaScript script to a local file. PREFERRED over [`get_script_source`](#get_script_source) whenever you need the whole file or want to grep/read a minified script — this tool auto-formats (beautifies) minified .js/.mjs/.ts output via prettier so the saved file is human-readable. Use this for any non-trivial source inspection; only fall back to [`get_script_source`](#get_script_source) for tiny known regions (e.g. ±20 lines around a breakpoint). Typical workflow: call [`save_script_source`](#save_script_source) → then use Read on the saved file (or Bash grep / your editor) to inspect it. NOTE: because the saved file is beautified, its line numbers DO NOT match the original script — if you later need to set a breakpoint, use the original URL/scriptId with [`set_breakpoint_on_text`](#set_breakpoint_on_text) rather than line numbers from the saved file.
 
 **Parameters:**
 
-- **filePath** (string) **(required)**: Local file path to save the script source to.
+- **filePath** (string) **(required)**: Local file path to save the script source to. Use a .js/.mjs/.cjs/.jsx/.ts/.tsx extension to enable auto-format (prettier beautify); other extensions save raw source verbatim. For WASM scripts, use a .wasm extension.
+- **format** (boolean) _(optional)_: Auto-format JavaScript/TypeScript output with prettier (beautifies minified code). Defaults to true. Set to false to save the raw original source verbatim.
 - **scriptId** (string) _(optional)_: Script ID (from [`list_scripts`](#list_scripts)). Becomes invalid after page navigation — prefer url instead.
 - **url** (string) _(optional)_: Script URL (preferred). Stable across page navigations. Exact match first, then substring match.
 
@@ -308,20 +297,5 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 **Parameters:**
 
 - **direction** (enum: "over", "into", "out") **(required)**: [`Step`](#step) direction: "over" (next statement), "into" (enter function), "out" (exit function).
-
----
-
-### `trace_function`
-
-**Description:** Traces calls to a function by its name in the source code. Works for ANY function including module-internal functions (webpack/rollup bundled). Uses "logpoints" (conditional breakpoints) to log arguments without pausing execution. Trace breakpoints persist across page navigations.
-
-**Parameters:**
-
-- **functionName** (string) **(required)**: The function name to trace. Will search for "function NAME" or "NAME = function" or "NAME(" patterns.
-- **logArgs** (boolean) _(optional)_: Whether to log function arguments (default: true).
-- **logThis** (boolean) _(optional)_: Whether to log "this" context (default: false).
-- **pause** (boolean) _(optional)_: Whether to actually pause execution (default: false, just logs).
-- **traceId** (string) _(optional)_: Custom ID for this trace. Used to identify in logs.
-- **urlFilter** (string) _(optional)_: Only search in scripts matching this URL pattern.
 
 ---

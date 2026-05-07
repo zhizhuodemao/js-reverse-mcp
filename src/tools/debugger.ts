@@ -14,6 +14,8 @@
  * - Request initiator (call stack) analysis
  */
 
+import * as prettier from 'prettier';
+
 import type {CallFrame, DebuggerContext} from '../DebuggerContext.js';
 import {zod} from '../third_party/index.js';
 
@@ -150,7 +152,7 @@ export const listScripts = defineTool({
 export const getScriptSource = defineTool({
   name: 'get_script_source',
   description:
-    'Gets a small snippet of a JavaScript script source by URL (recommended) or script ID. Supports line range (for normal files) or character offset (for minified single-line files). Prefer using url over scriptId — URLs remain stable across page navigations while script IDs become invalid after reload. IMPORTANT: This tool is designed for reading small code regions (e.g. around breakpoints or search results). You MUST always specify startLine/endLine or offset/length. To read an entire script file, use curl to download it by its URL instead.',
+    'Gets a small snippet of a JavaScript script source by URL (recommended) or script ID. Supports line range (for normal files) or character offset (for minified single-line files). Prefer using url over scriptId — URLs remain stable across page navigations while script IDs become invalid after reload. IMPORTANT: This tool is designed for reading small code regions (e.g. around breakpoints or search results). You MUST always specify startLine/endLine or offset/length. To read an entire script file (especially minified ones), use save_script_source instead — it downloads the full source and auto-formats minified code for readability. WASM scripts cannot be read by this tool — it will reject them and direct you to save_script_source.',
   annotations: {
     title: 'Get Script Source',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -209,9 +211,7 @@ export const getScriptSource = defineTool({
     let {scriptId} = request.params;
 
     if (!url && !scriptId) {
-      response.appendResponseLine(
-        'Either url or scriptId must be provided.',
-      );
+      response.appendResponseLine('Either url or scriptId must be provided.');
       return;
     }
 
@@ -280,7 +280,10 @@ export const getScriptSource = defineTool({
             `Selected lines ${start + 1}-${Math.min(end, lines.length)} of script ${scriptId} are too large (${content.length} chars). This file is likely minified.`,
           );
           response.appendResponseLine(
-            `Use offset/length params instead. The character offset for line ${start + 1} is ${lineOffset}.`,
+            `Recommended: use save_script_source to download the full file — it auto-formats minified code so you can read it normally afterwards.`,
+          );
+          response.appendResponseLine(
+            `Or use offset/length params for a partial read. The character offset for line ${start + 1} is ${lineOffset}.`,
           );
           response.appendResponseLine(`First 1000 characters:\n`);
           response.appendResponseLine('```javascript');
@@ -303,7 +306,7 @@ export const getScriptSource = defineTool({
       // Full source - but warn if it's too large
       if (source.length > 1000) {
         response.appendResponseLine(
-          `Script ${scriptId} is large (${source.length} chars). Use offset/length or startLine/endLine to read portions.`,
+          `Script ${scriptId} is large (${source.length} chars). To view the whole file, use save_script_source (auto-formats minified code). To read a portion inline, use offset/length or startLine/endLine.`,
         );
         response.appendResponseLine(`First 1000 characters:\n`);
         response.appendResponseLine('```javascript');
@@ -329,7 +332,7 @@ export const getScriptSource = defineTool({
 export const saveScriptSource = defineTool({
   name: 'save_script_source',
   description:
-    'Saves the full source code of a JavaScript script to a local file. Use this to download complete script sources for offline analysis, especially for large or minified files that are too big to view inline with get_script_source.',
+    'Saves the full source code of a JavaScript script to a local file. PREFERRED over get_script_source whenever you need the whole file or want to grep/read a minified script — this tool auto-formats (beautifies) minified .js/.mjs/.ts output via prettier so the saved file is human-readable. Use this for any non-trivial source inspection; only fall back to get_script_source for tiny known regions (e.g. ±20 lines around a breakpoint). Typical workflow: call save_script_source → then use Read on the saved file (or Bash grep / your editor) to inspect it. NOTE: because the saved file is beautified, its line numbers DO NOT match the original script — if you later need to set a breakpoint, use the original URL/scriptId with set_breakpoint_on_text rather than line numbers from the saved file.',
   annotations: {
     title: 'Save Script Source',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -350,7 +353,16 @@ export const saveScriptSource = defineTool({
       ),
     filePath: zod
       .string()
-      .describe('Local file path to save the script source to.'),
+      .describe(
+        'Local file path to save the script source to. Use a .js/.mjs/.cjs/.jsx/.ts/.tsx extension to enable auto-format (prettier beautify); other extensions save raw source verbatim. For WASM scripts, use a .wasm extension.',
+      ),
+    format: zod
+      .boolean()
+      .optional()
+      .default(true)
+      .describe(
+        'Auto-format JavaScript/TypeScript output with prettier (beautifies minified code). Defaults to true. Set to false to save the raw original source verbatim.',
+      ),
   },
   handler: async (request, response, context) => {
     const debugger_ = context.debuggerContext;
@@ -362,12 +374,10 @@ export const saveScriptSource = defineTool({
       return;
     }
 
-    const {url, scriptId, filePath} = request.params;
+    const {url, scriptId, filePath, format} = request.params;
 
     if (!url && !scriptId) {
-      response.appendResponseLine(
-        'Either url or scriptId must be provided.',
-      );
+      response.appendResponseLine('Either url or scriptId must be provided.');
       return;
     }
 
@@ -390,7 +400,9 @@ export const saveScriptSource = defineTool({
       }
 
       if (!source && !bytecode) {
-        response.appendResponseLine(`No source found for script ${resolvedId}.`);
+        response.appendResponseLine(
+          `No source found for script ${resolvedId}.`,
+        );
         return;
       }
 
@@ -401,10 +413,25 @@ export const saveScriptSource = defineTool({
           `Saved WASM script source to ${result.filename} (${binaryData.length} bytes).`,
         );
       } else {
-        const data = new TextEncoder().encode(source);
+        let output = source;
+        let formatNote = '';
+        const ext = filePath.toLowerCase().match(/\.(m?[jt]sx?)$/)?.[1];
+        if (format && ext) {
+          const parser = ext.startsWith('t') ? 'typescript' : 'babel';
+          try {
+            output = await prettier.format(source, {
+              parser,
+              printWidth: 120,
+            });
+            formatNote = ' (formatted)';
+          } catch (err) {
+            formatNote = ` (format skipped: ${err instanceof Error ? err.message.split('\n')[0] : String(err)})`;
+          }
+        }
+        const data = new TextEncoder().encode(output);
         const result = await context.saveFile(data, filePath);
         response.appendResponseLine(
-          `Saved script source to ${result.filename} (${source.length} chars).`,
+          `Saved script source to ${result.filename} (${output.length} chars${formatNote}).`,
         );
       }
     } catch (error) {
@@ -639,15 +666,11 @@ export const removeBreakpoint = defineTool({
       if (breakpointId) {
         // Remove a single code breakpoint by ID
         await debugger_.removeBreakpoint(breakpointId);
-        response.appendResponseLine(
-          `Breakpoint ${breakpointId} removed.`,
-        );
+        response.appendResponseLine(`Breakpoint ${breakpointId} removed.`);
       } else if (url) {
         // Remove a single XHR breakpoint by URL
         await debugger_.removeXHRBreakpoint(url);
-        response.appendResponseLine(
-          `XHR breakpoint for "${url}" removed.`,
-        );
+        response.appendResponseLine(`XHR breakpoint for "${url}" removed.`);
       } else {
         // Remove all breakpoints (code + XHR)
         const codeCount = debugger_.getBreakpoints().length;
@@ -683,7 +706,8 @@ export const removeBreakpoint = defineTool({
  */
 export const listBreakpoints = defineTool({
   name: 'list_breakpoints',
-  description: 'Lists all active breakpoints in the current debugging session. Breakpoints persist across page navigations and are automatically restored after reload/goto/back/forward.',
+  description:
+    'Lists all active breakpoints in the current debugging session. Breakpoints persist across page navigations and are automatically restored after reload/goto/back/forward.',
   annotations: {
     title: 'List Breakpoints',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -967,9 +991,7 @@ export const getPausedInfo = defineTool({
                 }
               }
             } catch {
-              response.appendResponseLine(
-                '    (unable to retrieve variables)',
-              );
+              response.appendResponseLine('    (unable to retrieve variables)');
             }
           }
         }
@@ -1284,313 +1306,6 @@ export const breakOnXhr = defineTool({
       response.appendResponseLine(
         'Debugger will pause when a matching XHR/Fetch request is made.',
       );
-    } catch (error) {
-      response.appendResponseLine(
-        `Error: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
-
-
-/**
- * Trace a function by name - works for module-internal functions.
- * Uses conditional breakpoints to log without pausing.
- */
-export const traceFunction = defineTool({
-  name: 'trace_function',
-  description:
-    'Traces calls to a function by its name in the source code. Works for ANY function including module-internal functions (webpack/rollup bundled). Uses "logpoints" (conditional breakpoints) to log arguments without pausing execution. Trace breakpoints persist across page navigations.',
-  annotations: {
-    title: 'Trace Function',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {
-    functionName: zod
-      .string()
-      .describe(
-        'The function name to trace. Will search for "function NAME" or "NAME = function" or "NAME(" patterns.',
-      ),
-    urlFilter: zod
-      .string()
-      .optional()
-      .describe('Only search in scripts matching this URL pattern.'),
-    logArgs: zod
-      .boolean()
-      .optional()
-      .default(true)
-      .describe('Whether to log function arguments (default: true).'),
-    logThis: zod
-      .boolean()
-      .optional()
-      .default(false)
-      .describe('Whether to log "this" context (default: false).'),
-    pause: zod
-      .boolean()
-      .optional()
-      .default(false)
-      .describe(
-        'Whether to actually pause execution (default: false, just logs).',
-      ),
-    traceId: zod
-      .string()
-      .optional()
-      .describe('Custom ID for this trace. Used to identify in logs.'),
-  },
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    const {functionName, urlFilter, logArgs, logThis, pause, traceId} =
-      request.params;
-    const id = traceId || `trace_${functionName}`;
-
-    // Search patterns for function definitions
-    const patterns = [
-      `function ${functionName}`,
-      `${functionName}=function`,
-      `${functionName} = function`,
-      `${functionName}=(`,
-      `${functionName} = (`,
-      `${functionName}(`,
-      `${functionName}:function`,
-      `${functionName}: function`,
-    ];
-
-    try {
-      let foundMatch = null;
-
-      // Search for each pattern
-      for (const pattern of patterns) {
-        const result = await debugger_.searchInScripts(pattern, {
-          caseSensitive: true,
-          isRegex: false,
-        });
-
-        let matches = result.matches;
-
-        // Apply URL filter
-        if (urlFilter) {
-          const lowerFilter = urlFilter.toLowerCase();
-          matches = matches.filter(
-            m => m.url && m.url.toLowerCase().includes(lowerFilter),
-          );
-        }
-
-        // Skip minified files with extremely long lines
-        matches = matches.filter(m => m.lineContent.length < 100000);
-
-        if (matches.length > 0) {
-          foundMatch = {pattern, match: matches[0]};
-          break;
-        }
-      }
-
-      if (!foundMatch) {
-        response.appendResponseLine(
-          `❌ Function "${functionName}" not found in any script.`,
-        );
-        response.appendResponseLine('');
-        response.appendResponseLine('Searched patterns:');
-        for (const p of patterns.slice(0, 4)) {
-          response.appendResponseLine(`  - "${p}"`);
-        }
-        response.appendResponseLine('');
-        response.appendResponseLine(
-          'Tip: Use search_in_sources to find the exact function signature, then use set_breakpoint_on_text.',
-        );
-        return;
-      }
-
-      const {match} = foundMatch;
-      const script = debugger_.getScriptById(match.scriptId);
-      const url = script?.url || match.url;
-
-      if (!url) {
-        response.appendResponseLine(
-          'Cannot trace: script has no URL (inline script).',
-        );
-        return;
-      }
-
-      // Get exact column position
-      const result = await debugger_.getScriptSource(match.scriptId);
-      const source = result.scriptSource;
-      const lines = source.split('\n');
-      let columnNumber = 0;
-
-      if (match.lineNumber < lines.length) {
-        const lineContent = lines[match.lineNumber];
-        const funcStart = lineContent.indexOf(foundMatch.pattern);
-        if (funcStart >= 0) {
-          // Find opening brace or paren after the pattern
-          const afterPattern = lineContent.substring(
-            funcStart + foundMatch.pattern.length,
-          );
-          const braceMatch = afterPattern.match(/[({]/);
-          if (braceMatch && braceMatch.index !== undefined) {
-            columnNumber =
-              funcStart + foundMatch.pattern.length + braceMatch.index + 1;
-          } else {
-            columnNumber = funcStart;
-          }
-        }
-      }
-
-      // Build the logging expression
-      const logParts = [`'[Trace ${id}] ${functionName} called'`];
-      if (logArgs) {
-        logParts.push(`'args:'`);
-        logParts.push(`JSON.stringify(Array.from(arguments)).slice(0,500)`);
-      }
-      if (logThis) {
-        logParts.push(`'this:'`);
-        logParts.push(`this?.constructor?.name || typeof this`);
-      }
-      const logExpr = `console.log(${logParts.join(', ')})`;
-
-      // If not pausing, wrap in expression that returns false
-      const condition = pause ? logExpr : `(${logExpr}, false)`;
-
-      // Set the breakpoint
-      const breakpointInfo = await debugger_.setBreakpoint(
-        url,
-        match.lineNumber,
-        columnNumber,
-        condition,
-      );
-
-      response.appendResponseLine(`✅ Function trace installed!`);
-      response.appendResponseLine(`- Trace ID: ${id}`);
-      response.appendResponseLine(`- Function: ${functionName}`);
-      response.appendResponseLine(
-        `- Breakpoint ID: ${breakpointInfo.breakpointId}`,
-      );
-      response.appendResponseLine(
-        `- Location: ${url}:${match.lineNumber + 1}:${columnNumber}`,
-      );
-      response.appendResponseLine(
-        `- Mode: ${pause ? 'Pause on call' : 'Log only (no pause)'}`,
-      );
-      response.appendResponseLine('');
-      response.appendResponseLine(
-        'Calls will be logged to console. Use list_console_messages to view.',
-      );
-      response.appendResponseLine(
-        `Use remove_breakpoint(breakpointId: "${breakpointInfo.breakpointId}") to stop tracing.`,
-      );
-
-      // Show context
-      if (match.lineNumber < lines.length) {
-        const lineContent = lines[match.lineNumber];
-        const contextStart = Math.max(0, columnNumber - 30);
-        const contextEnd = Math.min(lineContent.length, columnNumber + 50);
-        const preview = lineContent.substring(contextStart, contextEnd);
-        const prefix = contextStart > 0 ? '...' : '';
-        const suffix = contextEnd < lineContent.length ? '...' : '';
-
-        response.appendResponseLine('');
-        response.appendResponseLine('Trace point:');
-        response.appendResponseLine('```javascript');
-        response.appendResponseLine(`${prefix}${preview}${suffix}`);
-        response.appendResponseLine('```');
-      }
-    } catch (error) {
-      response.appendResponseLine(
-        `Error: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-  },
-});
-
-/**
- * Inject or remove a script that runs before every page load.
- */
-export const injectScript = defineTool({
-  name: 'inject_before_load',
-  description:
-    'Injects a JavaScript script that runs before any page script on every page load. Pass script to inject, or pass identifier to remove a previously injected script.',
-  annotations: {
-    title: 'Inject Before Load',
-    category: ToolCategory.REVERSE_ENGINEERING,
-    readOnlyHint: false,
-  },
-  schema: {
-    script: zod
-      .string()
-      .optional()
-      .describe(
-        'JavaScript code to inject. Runs before any page script. Example: Object.defineProperty(window, "h5sign", { set(v) { debugger; this._h5sign = v; }, get() { return this._h5sign; } })',
-      ),
-    identifier: zod
-      .string()
-      .optional()
-      .describe(
-        'The identifier of a previously injected script to remove.',
-      ),
-  },
-  handler: async (request, response, context) => {
-    const debugger_ = context.debuggerContext;
-
-    if (!debugger_.isEnabled()) {
-      response.appendResponseLine(
-        'Debugger is not enabled. Please select a page first.',
-      );
-      return;
-    }
-
-    const client = debugger_.getClient();
-    if (!client) {
-      response.appendResponseLine('Debugger client not available.');
-      return;
-    }
-
-    const {script, identifier} = request.params;
-
-    if (!script && !identifier) {
-      response.appendResponseLine(
-        'Either script (to inject) or identifier (to remove) must be provided.',
-      );
-      return;
-    }
-
-    try {
-      await client.send('Page.enable');
-
-      if (identifier) {
-        // Remove mode
-        await client.send('Page.removeScriptToEvaluateOnNewDocument', {
-          identifier,
-        });
-        context.untrackInjectedScript(identifier);
-        response.appendResponseLine(
-          `Injected script ${identifier} removed.`,
-        );
-      } else {
-        // Inject mode
-        const result = await client.send(
-          'Page.addScriptToEvaluateOnNewDocument',
-          {source: script!},
-        );
-        const id = result.identifier;
-        context.trackInjectedScript(id, script!);
-        response.appendResponseLine(
-          `Script injected. Identifier: ${id}`,
-        );
-        response.appendResponseLine(
-          'It will run before any page script on every load.',
-        );
-        response.appendResponseLine(
-          `To remove: inject_before_load(identifier: "${id}")`,
-        );
-      }
     } catch (error) {
       response.appendResponseLine(
         `Error: ${error instanceof Error ? error.message : String(error)}`,
