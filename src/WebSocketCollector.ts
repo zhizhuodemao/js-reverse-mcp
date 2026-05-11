@@ -144,6 +144,7 @@ export class WebSocketCollector {
   async #setupCdpListeners(page: Page): Promise<void> {
     try {
       const client = await this.#sessionProvider.getSession(page);
+      await client.send('Network.enable');
 
       const connectionMap = this.#connectionMap.get(page)!;
       const idGenerator = this.#idGenerators.get(page)!;

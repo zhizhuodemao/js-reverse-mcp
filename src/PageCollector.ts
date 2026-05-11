@@ -519,6 +519,7 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
 
     try {
       const client = await this.#sessionProvider.getSession(page);
+      await client.send('Network.enable');
 
       // Listen to CDP events for initiator info and request ID mapping
       const onRequestWillBeSent = (
