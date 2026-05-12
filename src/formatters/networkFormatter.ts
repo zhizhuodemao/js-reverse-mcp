@@ -28,6 +28,15 @@ export function getShortDescriptionForRequest(
   return `reqid=${id} [${request.resourceType()}] ${request.method()} ${request.url()} ${getStatusFromRequest(request)}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
 }
 
+export async function getShortDescriptionForRequestAsync(
+  request: HTTPRequest,
+  id: number,
+  selectedInDevToolsUI = false,
+): Promise<string> {
+  const status = await getStatusFromRequestAsync(request);
+  return `reqid=${id} [${request.resourceType()}] ${request.method()} ${request.url()} ${status}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
+}
+
 export function getStatusFromRequest(request: HTTPRequest): string {
   // In Playwright, request.response() is async, but we cache the failure info
   const failure = request.failure();

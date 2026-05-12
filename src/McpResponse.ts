@@ -17,7 +17,9 @@ import {
   getFormattedResponseBody,
   getFormattedRequestBody,
   getShortDescriptionForRequest,
+  getShortDescriptionForRequestAsync,
   getStatusFromRequest,
+  getStatusFromRequestAsync,
 } from './formatters/networkFormatter.js';
 import {
   formatWebSocketConnectionShort,
@@ -344,7 +346,7 @@ export class McpResponse implements Response {
     });
   }
 
-  format(
+  async format(
     toolName: string,
     context: McpContext,
     data: {
@@ -355,7 +357,7 @@ export class McpResponse implements Response {
       consoleData: ConsoleMessageData | undefined;
       consoleListData: ConsoleMessageData[] | undefined;
     },
-  ): Array<TextContent | ImageContent> {
+  ): Promise<Array<TextContent | ImageContent>> {
     const response = [`# ${toolName} response`];
     for (const line of this.#textResponseLines) {
       response.push(line);
@@ -397,7 +399,7 @@ export class McpResponse implements Response {
       }
     }
 
-    response.push(...this.#formatNetworkRequestData(context, data.bodies));
+    response.push(...await this.#formatNetworkRequestData(context, data.bodies));
     response.push(...this.#formatConsoleData(data.consoleData));
 
     if (this.#networkRequestsOptions?.include) {
@@ -437,7 +439,7 @@ export class McpResponse implements Response {
         response.push(...data.info);
         for (const request of data.items) {
           response.push(
-            getShortDescriptionForRequest(
+            await getShortDescriptionForRequestAsync(
               request,
               context.getNetworkRequestStableId(request),
               context.getNetworkRequestStableId(request) ===
@@ -565,13 +567,13 @@ export class McpResponse implements Response {
     return response;
   }
 
-  #formatNetworkRequestData(
+  async #formatNetworkRequestData(
     context: McpContext,
     data: {
       requestBody?: string;
       responseBody?: string;
     },
-  ): string[] {
+  ): Promise<string[]> {
     const response: string[] = [];
     const id = this.#attachedNetworkRequestId;
     if (!id) {
@@ -580,7 +582,7 @@ export class McpResponse implements Response {
 
     const httpRequest = context.getNetworkRequestById(id);
     response.push(`## Request ${httpRequest.url()}`);
-    response.push(`Status:  ${getStatusFromRequest(httpRequest)}`);
+    response.push(`Status:  ${await getStatusFromRequestAsync(httpRequest)}`);
     response.push(`### Request Headers`);
     for (const line of getFormattedHeaderValue(httpRequest.headers())) {
       response.push(line);
@@ -617,7 +619,7 @@ export class McpResponse implements Response {
       let indent = 0;
       for (const request of redirectChain.reverse()) {
         response.push(
-          `${'  '.repeat(indent)}${getShortDescriptionForRequest(request, context.getNetworkRequestStableId(request))}`,
+          `${'  '.repeat(indent)}${await getShortDescriptionForRequestAsync(request, context.getNetworkRequestStableId(request))}`,
         );
         indent++;
       }
