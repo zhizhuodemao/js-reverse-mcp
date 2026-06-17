@@ -45,7 +45,7 @@ const NETWORK_EXPORT_PARTS = [
 
 export const listNetworkRequests = defineTool({
   name: 'list_network_requests',
-  description: `List network requests for the currently selected page since the last navigation. Results are sorted newest-first. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate. Pass reqid to get a single request's full details. When exact bytes, full bodies, replay inputs, signature inputs, large request bodies, long GET query payloads, binary responses, or data for external decoding are needed, pass reqid with outputFile to export the selected data. For GET requests, payload-like data means parsed URL query parameters.`,
+  description: `List network requests for the currently selected page since the last navigation. Results are sorted newest-first. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate. List output marks responses that set cookies with [set-cookie]. Pass reqid to get a single request's full details, including request headers, response headers, and a dedicated Set-Cookie section when present. When exact bytes, full bodies, replay inputs, signature inputs, large request bodies, long GET query payloads, binary responses, or data for external decoding are needed, pass reqid with outputFile to export the selected data. For GET requests, payload-like data means parsed URL query parameters.`,
   annotations: {
     category: ToolCategory.NETWORK,
     // Not read-only due to outputFile export support.

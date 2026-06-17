@@ -13,11 +13,14 @@ import {
   formatConsoleEventVerbose,
 } from './formatters/consoleFormatter.js';
 import {
-  getFormattedHeaderValue,
+  getFormattedHeaderEntries,
   getFormattedResponseBody,
   getFormattedRequestBody,
   getNetworkRequestExportHints,
+  getRequestHeadersArray,
+  getResponseHeadersArray,
   getShortDescriptionForRequestAsync,
+  getSetCookieHeaders,
   getStatusFromRequestAsync,
 } from './formatters/networkFormatter.js';
 import {
@@ -447,6 +450,7 @@ export class McpResponse implements Response {
               context.getNetworkRequestStableId(request),
               context.getNetworkRequestStableId(request) ===
                 this.#networkRequestsOptions?.networkRequestIdInDevToolsUI,
+              true,
             ),
           );
         }
@@ -587,7 +591,9 @@ export class McpResponse implements Response {
     response.push(`## Request ${httpRequest.url()}`);
     response.push(`Status:  ${await getStatusFromRequestAsync(httpRequest)}`);
     response.push(`### Request Headers`);
-    for (const line of getFormattedHeaderValue(httpRequest.headers())) {
+    for (const line of getFormattedHeaderEntries(
+      await getRequestHeadersArray(httpRequest),
+    )) {
       response.push(line);
     }
 
@@ -596,8 +602,22 @@ export class McpResponse implements Response {
       response.push(data.requestBody);
     }
 
-    // Note: response headers are handled in the async path above
-    // since request.response() is async in Playwright
+    const httpResponse = await httpRequest.response();
+    if (httpResponse) {
+      const responseHeaders = await getResponseHeadersArray(httpResponse);
+      response.push(`### Response Headers`);
+      for (const line of getFormattedHeaderEntries(responseHeaders)) {
+        response.push(line);
+      }
+
+      const setCookieHeaders = getSetCookieHeaders(responseHeaders);
+      if (setCookieHeaders.length) {
+        response.push(`### Set-Cookie`);
+        for (const value of setCookieHeaders) {
+          response.push(`- ${value}`);
+        }
+      }
+    }
 
     if (data.responseBody) {
       response.push(`### Response Body`);

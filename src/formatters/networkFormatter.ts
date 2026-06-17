@@ -27,7 +27,7 @@ interface QueryPayload {
   entries: Array<{name: string; value: string}>;
 }
 
-interface HeaderEntry {
+export interface HeaderEntry {
   name: string;
   value: string;
 }
@@ -82,9 +82,14 @@ export async function getShortDescriptionForRequestAsync(
   request: HTTPRequest,
   id: number,
   selectedInDevToolsUI = false,
+  includeSetCookieMarker = false,
 ): Promise<string> {
   const status = await getStatusFromRequestAsync(request);
-  return `reqid=${id} [${request.resourceType()}] ${request.method()} ${request.url()} ${status}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
+  const setCookieMarker =
+    includeSetCookieMarker && (await requestHasSetCookie(request))
+      ? ' [set-cookie]'
+      : '';
+  return `reqid=${id} [${request.resourceType()}] ${request.method()} ${request.url()} ${status}${setCookieMarker}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
 }
 
 export function getStatusFromRequest(request: HTTPRequest): string {
@@ -118,14 +123,24 @@ export async function getStatusFromRequestAsync(
   return status;
 }
 
-export function getFormattedHeaderValue(
-  headers: Record<string, string>,
-): string[] {
-  const response: string[] = [];
-  for (const [name, value] of Object.entries(headers)) {
-    response.push(`- ${name}:${value}`);
+export async function requestHasSetCookie(
+  request: HTTPRequest,
+): Promise<boolean> {
+  const httpResponse = await request.response();
+  if (!httpResponse) {
+    return false;
   }
-  return response;
+
+  try {
+    const responseHeaders = await getResponseHeadersArray(httpResponse);
+    return getSetCookieHeaders(responseHeaders).length > 0;
+  } catch {
+    return false;
+  }
+}
+
+export function getFormattedHeaderEntries(headers: HeaderEntry[]): string[] {
+  return headers.map(({name, value}) => `- ${name}:${value}`);
 }
 
 export async function getFormattedResponseBody(
@@ -346,7 +361,7 @@ async function getNetworkRequestSnapshot(httpRequest: HTTPRequest) {
   };
 }
 
-async function getRequestHeadersArray(
+export async function getRequestHeadersArray(
   httpRequest: HTTPRequest,
 ): Promise<HeaderEntry[]> {
   return httpRequest
@@ -354,7 +369,7 @@ async function getRequestHeadersArray(
     .catch(() => objectToHeaderArray(httpRequest.headers()));
 }
 
-async function getResponseHeadersArray(
+export async function getResponseHeadersArray(
   httpResponse: HTTPResponse,
 ): Promise<HeaderEntry[]> {
   return httpResponse
@@ -384,7 +399,9 @@ function headersObjectFromArray(
   return result;
 }
 
-function getSetCookieHeaders(headersArray: readonly HeaderEntry[]): string[] {
+export function getSetCookieHeaders(
+  headersArray: readonly HeaderEntry[],
+): string[] {
   return headersArray
     .filter(({name}) => name.toLowerCase() === 'set-cookie')
     .map(({value}) => value);
