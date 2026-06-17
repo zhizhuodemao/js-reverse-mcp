@@ -17,6 +17,7 @@ import {
   IssueAggregator,
 } from '../node_modules/chrome-devtools-frontend/mcp/mcp.js';
 
+import {addCdpEventListener, removeCdpEventListener} from './CdpEvents.js';
 import type {CdpSessionProvider} from './CdpSessionProvider.js';
 import {FakeIssuesManager} from './DevtoolsUtils.js';
 import {features} from './features.js';
@@ -28,6 +29,7 @@ import type {
   Frame,
   HTTPRequest,
   Page,
+  Response as HTTPResponse,
 } from './third_party/index.js';
 
 /**
@@ -72,7 +74,7 @@ interface PageEvents {
   request: HTTPRequest;
   requestfailed: HTTPRequest;
   requestfinished: HTTPRequest;
-  response: import('./third_party/index.js').Response;
+  response: HTTPResponse;
   framenavigated: Frame;
   issue: AggregatedIssue;
 }
@@ -80,6 +82,39 @@ interface PageEvents {
 export type ListenerMap<EventMap extends PageEvents = PageEvents> = {
   [K in keyof EventMap]?: (event: EventMap[K]) => void;
 };
+
+type PageEventName = keyof PageEvents;
+type PageEventListener = (event: PageEvents[PageEventName]) => void;
+type PageEventRegistrar = (
+  name: PageEventName,
+  listener: PageEventListener,
+) => Page;
+
+function pageListenerEntries(
+  listeners: ListenerMap,
+): Array<[PageEventName, PageEventListener]> {
+  return Object.entries(listeners) as unknown as Array<
+    [PageEventName, PageEventListener]
+  >;
+}
+
+function addPageListener(
+  page: Page,
+  name: PageEventName,
+  listener: PageEventListener,
+): void {
+  const onPageEvent = page.on.bind(page) as unknown as PageEventRegistrar;
+  onPageEvent(name, listener);
+}
+
+function removePageListener(
+  page: Page,
+  name: PageEventName,
+  listener: PageEventListener,
+): void {
+  const offPageEvent = page.off.bind(page) as unknown as PageEventRegistrar;
+  offPageEvent(name, listener);
+}
 
 function createIdGenerator() {
   let i = 1;
@@ -175,8 +210,8 @@ export class PageCollector<T> {
       this.splitAfterNavigation(page);
     };
 
-    for (const [name, listener] of Object.entries(listeners)) {
-      page.on(name as any, listener as any);
+    for (const [name, listener] of pageListenerEntries(listeners)) {
+      addPageListener(page, name, listener);
     }
 
     this.#listeners.set(page, listeners);
@@ -195,8 +230,8 @@ export class PageCollector<T> {
   protected cleanupPageDestroyed(page: Page) {
     const listeners = this.#listeners.get(page);
     if (listeners) {
-      for (const [name, listener] of Object.entries(listeners)) {
-        page.off(name as any, listener as any);
+      for (const [name, listener] of pageListenerEntries(listeners)) {
+        removePageListener(page, name, listener);
       }
     }
     this.storage.delete(page);
@@ -276,7 +311,9 @@ export class ConsoleCollector extends PageCollector<
     ) => ListenerMap<PageEvents>,
   ) {
     // Wrap the original listener initializer to capture per-page collectors
-    const wrappedListeners = (collector: (item: ConsoleMessage | Error | AggregatedIssue) => void) => {
+    const wrappedListeners = (
+      collector: (item: ConsoleMessage | Error | AggregatedIssue) => void,
+    ) => {
       // Call the original to get the base listeners
       const baseListeners = listeners(collector);
       // The 'issue' key in baseListeners calls collector(event)
@@ -320,13 +357,19 @@ export class ConsoleCollector extends PageCollector<
       const issueCollector = (issue: AggregatedIssue) => {
         const navigations = this.storage.get(page);
         if (navigations && navigations[0]) {
-          const withId = issue as ConsoleMessage | Error | AggregatedIssue & {[stableIdSymbol]?: number};
-          (withId as any)[stableIdSymbol] = idGen();
-          navigations[0].push(withId as any);
+          const withId = issue as WithSymbolId<
+            ConsoleMessage | Error | AggregatedIssue
+          >;
+          withId[stableIdSymbol] = idGen();
+          navigations[0].push(withId);
         }
       };
       this.#pageIssueCollectors.set(page, issueCollector);
-      const subscriber = new PageIssueSubscriber(page, this.#sessionProvider, issueCollector);
+      const subscriber = new PageIssueSubscriber(
+        page,
+        this.#sessionProvider,
+        issueCollector,
+      );
       this.#subscribedPages.set(page, subscriber);
       void subscriber.subscribe();
     }
@@ -349,7 +392,11 @@ class PageIssueSubscriber {
   #session: CDPSession | null = null;
   #onIssueCallback: (issue: AggregatedIssue) => void;
 
-  constructor(page: Page, sessionProvider: CdpSessionProvider, onIssue: (issue: AggregatedIssue) => void) {
+  constructor(
+    page: Page,
+    sessionProvider: CdpSessionProvider,
+    onIssue: (issue: AggregatedIssue) => void,
+  ) {
     this.#page = page;
     this.#sessionProvider = sessionProvider;
     this.#onIssueCallback = onIssue;
@@ -376,7 +423,11 @@ class PageIssueSubscriber {
     this.#page.on('framenavigated', this.#onFrameNavigated);
     try {
       this.#session = await this.#sessionProvider.getSession(this.#page);
-      this.#session.on('Audits.issueAdded' as any, this.#onIssueAdded);
+      addCdpEventListener(
+        this.#session,
+        'Audits.issueAdded',
+        this.#onIssueAdded,
+      );
       await this.#session.send('Audits.enable');
     } catch (error) {
       logger('Error subscribing to issues', error);
@@ -388,7 +439,11 @@ class PageIssueSubscriber {
     this.#seenIssues.clear();
     this.#page.off('framenavigated', this.#onFrameNavigated);
     if (this.#session) {
-      this.#session.off('Audits.issueAdded' as any, this.#onIssueAdded);
+      removeCdpEventListener(
+        this.#session,
+        'Audits.issueAdded',
+        this.#onIssueAdded,
+      );
     }
     if (this.#issueAggregator) {
       this.#issueAggregator.removeEventListener(
@@ -526,7 +581,10 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
         event: Protocol.Network.RequestWillBeSentEvent,
       ): void => {
         if (event.initiator) {
-          initiatorMap.set(event.requestId, event.initiator as RequestInitiator);
+          initiatorMap.set(
+            event.requestId,
+            event.initiator as RequestInitiator,
+          );
         }
 
         // Map CDP request ID to Playwright Request via URL+method matching
@@ -549,10 +607,18 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
         }
       };
 
-      client.on('Network.requestWillBeSent' as any, onRequestWillBeSent);
+      addCdpEventListener(
+        client,
+        'Network.requestWillBeSent',
+        onRequestWillBeSent,
+      );
 
       const cleanup = () => {
-        client.off('Network.requestWillBeSent' as any, onRequestWillBeSent);
+        removeCdpEventListener(
+          client,
+          'Network.requestWillBeSent',
+          onRequestWillBeSent,
+        );
       };
       this.#cdpListeners.set(page, cleanup);
     } catch {

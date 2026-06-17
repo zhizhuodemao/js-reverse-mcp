@@ -166,68 +166,71 @@ Add a new tool:
 clear_site_data
 ```
 
-The tool should reset browser state for the currently selected page's site. It
-should not reset the entire browser profile.
+The tool should create a clean replay environment for the currently selected
+page. It is intentionally zero-parameter: calling it means "clear the browser
+state that would otherwise pollute the next replay."
 
-Initial schema:
+Schema:
 
 ```ts
 {
-  cookies?: boolean;          // default true
-  localStorage?: boolean;     // default true
-  sessionStorage?: boolean;   // default true
-  indexedDB?: boolean;        // default false
-  cacheStorage?: boolean;     // default false
-  serviceWorkers?: boolean;   // default false
-  reload?: boolean;           // default false
 }
 ```
 
-Default behavior:
+Behavior:
 
-- Clear cookies that apply to the current page URL.
-- Clear localStorage for the current origin.
-- Clear sessionStorage in the current page.
-- Do not clear IndexedDB, Cache Storage, or Service Workers unless explicitly
-  requested.
-- Do not reload unless explicitly requested.
+- Clear all cookies in the current browser context, including `HttpOnly`
+  cookies. This is not scoped to the selected page: it clears cookies for all
+  sites and pages that share the current browser context.
+- Clear browser HTTP cache.
+- Clear all persistent storage for the selected page's origin through CDP
+  `Storage.clearDataForOrigin` with `storageTypes: "all"`. This covers
+  localStorage, IndexedDB, Cache Storage, Service Workers, WebSQL, file systems,
+  storage buckets, shared storage, and related CDP-supported origin data.
+- Clear current page sessionStorage.
+- Do not reload.
 
-Rationale for conservative defaults:
+Rationale:
 
-- Cookie and Web Storage reset is the common first step for cookie generation
-  analysis.
-- IndexedDB, cache storage, and service workers can be part of the behavior under
-  investigation.
-- Deleting too much by default can create a browser state that differs from a
-  normal returning or first-time user path.
+- Cookie generation analysis needs a clean environment, not a partially cleaned
+  page.
+- Leaving localStorage, IndexedDB, Cache Storage, or Service Workers behind can
+  cause the next replay to differ from a fresh visit.
+- The model should not choose cookie names, domains, paths, or storage types.
+- Reload remains a separate explicit navigation action.
 
 Implementation requirements:
 
 - Derive the target URL from the selected page.
 - Reject pages without a normal HTTP(S) origin, such as `about:blank`, `data:`,
   and `file:`, with a clear error.
-- Clear cookies through the browser context, not through page JavaScript.
-- Use `browserContext.cookies([page.url()])` to find cookies that affect the
-  current URL.
-- Delete matched cookies by name/domain/path through
-  `browserContext.clearCookies(...)`.
-- Clear origin storage through CDP `Storage.clearDataForOrigin`.
-- Use storage type names supported by Chrome DevTools Protocol:
-  `local_storage`, `indexeddb`, `cache_storage`, `service_workers`.
-- Clear sessionStorage with a page evaluation against the current selected
-  frame/page.
-- Return a concise summary of what was cleared and skipped.
+- Clear cookies through the browser context, not through page JavaScript, using
+  `browserContext.clearCookies()` with no filters.
+- Clear browser HTTP cache through CDP `Network.clearBrowserCache`.
+- Clear selected-origin persistent storage through CDP
+  `Storage.clearDataForOrigin`.
+- Clear sessionStorage with a page evaluation against the current page.
+- Run cleanup best-effort: if one cleanup step fails, continue with the
+  remaining steps.
+- Return a concise summary of what was actually cleared and any warnings.
 
 Example response:
 
 ```text
-Cleared site data for https://www.example.com
+Browser state cleanup completed for https://www.example.com
 URL: https://www.example.com/login
 
-Cookies removed: 4
-Storage cleared: local_storage, session_storage
-Skipped: indexeddb, cache_storage, service_workers
-Reload: false
+Cookies cleared: yes
+Cookies found before clearing: 42
+Cookie domains: example.com, google.com, doubleclick.net
+Cookie names: _abck, bm_sz, session_id
+Browser HTTP cache cleared: yes
+Origin storage cleared: yes (Storage.clearDataForOrigin all)
+Session storage cleared: yes
+Warnings:
+none
+
+The page was not reloaded. Use navigate_page({type:"reload"}) to replay cookie generation.
 ```
 
 ## Tool Boundary
@@ -235,7 +238,7 @@ Reload: false
 The changes should keep tool responsibilities orthogonal:
 
 - `list_network_requests` observes and inspects network activity.
-- `clear_site_data` resets current-site browser state.
+- `clear_site_data` creates a clean replay environment for the selected page.
 - `navigate_page` triggers reloads or navigations.
 - `evaluate_script` executes analyst-written JavaScript in the page or paused
   call-frame context.
@@ -249,7 +252,7 @@ site state.
 1. Add complete response header rendering to request detail view.
 2. Add the dedicated `Set-Cookie` section to request detail view.
 3. Add `[set-cookie]` markers to request list output.
-4. Add `clear_site_data` with conservative defaults.
+4. Add zero-parameter `clear_site_data` with strong cleanup behavior.
 5. Update generated tool documentation.
 6. Run validation.
 
@@ -274,10 +277,15 @@ Network inspection:
 
 Site state reset:
 
-- `clear_site_data` clears current URL cookies, including `HttpOnly` cookies.
-- `clear_site_data` clears current-origin localStorage by default.
-- `clear_site_data` clears current-page sessionStorage by default.
-- IndexedDB, cache storage, and service workers are opt-in.
-- The tool does not clear unrelated sites.
-- The tool does not reload by default.
-- The tool returns a clear summary of actions taken.
+- `clear_site_data` has no parameters.
+- `clear_site_data` clears all cookies in the current browser context,
+  including `HttpOnly` cookies. Other sites in the same browser context can lose
+  cookie-based login state.
+- `clear_site_data` clears browser HTTP cache.
+- `clear_site_data` clears all persistent storage for the selected page's
+  origin.
+- `clear_site_data` clears current-page sessionStorage.
+- The tool does not reload.
+- The tool continues clearing what it can if an individual step fails.
+- The tool returns a clear summary of what was actually cleared and any
+  warnings.

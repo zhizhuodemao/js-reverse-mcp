@@ -29,6 +29,7 @@ import * as networkTools from './tools/network.js';
 import * as pagesTools from './tools/pages.js';
 import * as screenshotTools from './tools/screenshot.js';
 import * as scriptTools from './tools/script.js';
+import * as siteDataTools from './tools/siteData.js';
 import type {ToolDefinition} from './tools/ToolDefinition.js';
 import * as websocketTools from './tools/websocket.js';
 
@@ -108,10 +109,14 @@ function registerTool(tool: ToolDefinition): void {
         logger(`${tool.name} request: ${JSON.stringify(params, null, '  ')}`);
         const context = await getContext();
         logger(`${tool.name} context: resolved`);
-        // Navigation tools must operate in complete CDP silence.
+        // Navigation and browser-state tools must operate in CDP silence except
+        // for their own explicit protocol calls.
         // Anti-bot systems detect ANY CDP activity during page load,
         // including session creation from detectOpenDevToolsWindows().
-        if (tool.annotations.category !== ToolCategory.NAVIGATION) {
+        if (
+          tool.annotations.category !== ToolCategory.NAVIGATION &&
+          tool.annotations.category !== ToolCategory.BROWSER_STATE
+        ) {
           await context.ensureCollectorsInitialized();
           await context.detectOpenDevToolsWindows();
         }
@@ -160,6 +165,7 @@ const tools = [
   ...Object.values(pagesTools),
   ...Object.values(screenshotTools),
   ...Object.values(scriptTools),
+  ...Object.values(siteDataTools),
 
   ...Object.values(websocketTools),
 ] as ToolDefinition[];

@@ -4,7 +4,12 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import type {BrowserContext, CDPSession, Frame, Page} from './third_party/index.js';
+import type {
+  BrowserContext,
+  CDPSession,
+  Frame,
+  Page,
+} from './third_party/index.js';
 
 /**
  * CDP Session cache layer for Playwright/Patchright.
@@ -67,13 +72,13 @@ export class CdpSessionProvider {
     if ('mainFrame' in pageOrFrame) {
       const session = this.#pageSessions.get(pageOrFrame as Page);
       if (session) {
-        void session.detach().catch(() => {});
+        void session.detach().catch(() => undefined);
         this.#pageSessions.delete(pageOrFrame as Page);
       }
     } else {
       const session = this.#frameSessions.get(pageOrFrame as Frame);
       if (session) {
-        void session.detach().catch(() => {});
+        void session.detach().catch(() => undefined);
         this.#frameSessions.delete(pageOrFrame as Frame);
       }
     }

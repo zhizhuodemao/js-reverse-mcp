@@ -34,7 +34,9 @@ async function loadCloakBrowser(): Promise<CloakBrowserModule> {
  * must redirect those writes to stderr while it runs. Progress is still
  * visible (stderr surfaces in the MCP client's server log panel).
  */
-async function withStdoutRedirectedToStderr<T>(fn: () => Promise<T>): Promise<T> {
+async function withStdoutRedirectedToStderr<T>(
+  fn: () => Promise<T>,
+): Promise<T> {
   const origLog = console.log;
   const origInfo = console.info;
   console.log = (...args: unknown[]) => console.error(...args);

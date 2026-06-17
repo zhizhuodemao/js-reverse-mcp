@@ -85,12 +85,12 @@ npm run build
 
 本项目的反检测**分层清晰**。包装层（这个 MCP 自己）**零 JS 注入**、不做 `Object.defineProperty` hack（那本身就是检测信号）。所有反检测都在两个互不重叠的层：
 
-| 层 | 默认模式 | `--cloak` 模式 |
-| --- | --- | --- |
-| **协议层**（CDP） | Patchright：不调 `Runtime.enable` / `Console.enable`，在 isolated world 里执行 evaluate，移除自动化 launch flag | 同 |
-| **源码层**（C++ 二进制 patch） | 无 —— 直接用系统 Google Chrome | CloakBrowser 二进制（49 个 C++ patch：`navigator.webdriver`、canvas、WebGL、audio、GPU、字体、屏幕、WebRTC、TLS） |
-| **Profile 目录** | `~/.cache/chrome-devtools-mcp/chrome-profile`（持久化登录态） | `~/.cache/chrome-devtools-mcp/cloak-profile`（与默认物理隔离） |
-| **实际浏览器** | 你装的 Google Chrome（带 Web Store、扩展、sync） | 定制 Chromium 编译版（无 Google 服务、无 Web Store） |
+| 层                             | 默认模式                                                                                                        | `--cloak` 模式                                                                                                    |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| **协议层**（CDP）              | Patchright：不调 `Runtime.enable` / `Console.enable`，在 isolated world 里执行 evaluate，移除自动化 launch flag | 同                                                                                                                |
+| **源码层**（C++ 二进制 patch） | 无 —— 直接用系统 Google Chrome                                                                                  | CloakBrowser 二进制（49 个 C++ patch：`navigator.webdriver`、canvas、WebGL、audio、GPU、字体、屏幕、WebRTC、TLS） |
+| **Profile 目录**               | `~/.cache/chrome-devtools-mcp/chrome-profile`（持久化登录态）                                                   | `~/.cache/chrome-devtools-mcp/cloak-profile`（与默认物理隔离）                                                    |
+| **实际浏览器**                 | 你装的 Google Chrome（带 Web Store、扩展、sync）                                                                | 定制 Chromium 编译版（无 Google 服务、无 Web Store）                                                              |
 
 另外几个导航级措施（两种模式都生效）：
 
@@ -186,12 +186,12 @@ npm run build
 
 CLI 刻意精简到 4 个 flag，全部可选。**99% 场景默认即可**。
 
-| 选项 | 描述 | 默认值 |
-| --- | --- | --- |
-| `--cloak` | 切换到 CloakBrowser 隐身二进制（取代系统 Chrome）。叠加 49 个 C++ 源码层指纹 patch。首次启动自动下载 ~200MB 二进制；指纹身份按 profile 持久化。详见 [docs/cloak.md](docs/cloak.md)。 | `false` |
-| `--isolated` | 使用临时 user-data-dir（cookies/localStorage 不保留，关闭时自动清理） | `false` |
-| `--browserUrl, -u` | 连接到已运行的 Chrome 实例（CDP HTTP 端点，如 `http://127.0.0.1:9222`）。MCP 会自动探测出 WebSocket debugger URL。本地 Chrome、AdsPower、BitBrowser 等怎么拿到这个端点详见 [docs/cdp-endpoint.md](docs/cdp-endpoint.md)。 | – |
-| `--logFile` | 调试日志输出文件路径（配合 `DEBUG=*` 环境变量得到详细日志） | – |
+| 选项               | 描述                                                                                                                                                                                                                      | 默认值  |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `--cloak`          | 切换到 CloakBrowser 隐身二进制（取代系统 Chrome）。叠加 49 个 C++ 源码层指纹 patch。首次启动自动下载 ~200MB 二进制；指纹身份按 profile 持久化。详见 [docs/cloak.md](docs/cloak.md)。                                      | `false` |
+| `--isolated`       | 使用临时 user-data-dir（cookies/localStorage 不保留，关闭时自动清理）                                                                                                                                                     | `false` |
+| `--browserUrl, -u` | 连接到已运行的 Chrome 实例（CDP HTTP 端点，如 `http://127.0.0.1:9222`）。MCP 会自动探测出 WebSocket debugger URL。本地 Chrome、AdsPower、BitBrowser 等怎么拿到这个端点详见 [docs/cdp-endpoint.md](docs/cdp-endpoint.md)。 | –       |
+| `--logFile`        | 调试日志输出文件路径（配合 `DEBUG=*` 环境变量得到详细日志）                                                                                                                                                               | –       |
 
 ### 示例配置
 
@@ -211,9 +211,11 @@ CLI 刻意精简到 4 个 flag，全部可选。**99% 场景默认即可**。
 **`--cloak` —— 强反爬站点**（Cloudflare Turnstile / DataDome / FingerprintJS 防护）：
 
 > **强烈推荐：先把二进制预下载好**（一次性，~30–60 秒）。**不做这一步**的话，首次启动带 `--cloak` 的 MCP 会**静默下载 ~200MB**，看起来像 MCP 卡住了：
+>
 > ```bash
 > npx cloakbrowser install
 > ```
+>
 > （`cloakbrowser` 包已经通过 `optionalDependencies` 一起装好，这条命令只是触发它自带的二进制下载逻辑，有进度条）
 
 ```json

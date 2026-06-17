@@ -4,6 +4,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import {addCdpEventListener, removeCdpEventListener} from './CdpEvents.js';
 import type {CdpSessionProvider} from './CdpSessionProvider.js';
 import {logger} from './logger.js';
 import type {CDPSession, Page} from './third_party/index.js';
@@ -38,7 +39,12 @@ export class WaitForHelper {
     networkTimeoutMultiplier: number,
   ): Promise<WaitForHelper> {
     const session = await sessionProvider.getSession(page);
-    return new WaitForHelper(page, session, cpuTimeoutMultiplier, networkTimeoutMultiplier);
+    return new WaitForHelper(
+      page,
+      session,
+      cpuTimeoutMultiplier,
+      networkTimeoutMultiplier,
+    );
   }
 
   /**
@@ -112,10 +118,18 @@ export class WaitForHelper {
         resolve(true);
       };
 
-      this.#cdpSession.on('Page.frameStartedNavigating' as any, listener);
+      addCdpEventListener(
+        this.#cdpSession,
+        'Page.frameStartedNavigating',
+        listener,
+      );
       this.#abortController.signal.addEventListener('abort', () => {
         resolve(false);
-        this.#cdpSession.off('Page.frameStartedNavigating' as any, listener);
+        removeCdpEventListener(
+          this.#cdpSession,
+          'Page.frameStartedNavigating',
+          listener,
+        );
       });
     });
 

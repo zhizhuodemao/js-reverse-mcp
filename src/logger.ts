@@ -20,7 +20,7 @@ export function saveLogsToFile(fileName: string): fs.WriteStream {
   debug.enable(namespacesToEnable.join(','));
 
   const logFile = fs.createWriteStream(fileName, {flags: 'a+'});
-  debug.log = function (...chunks: any[]) {
+  debug.log = function (...chunks: unknown[]) {
     logFile.write(`${chunks.join(' ')}\n`);
   };
   logFile.on('error', function (error) {

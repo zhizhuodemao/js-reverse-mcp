@@ -4,10 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// Use devtools-protocol types for data structures.
-// The CDPSession is typed as 'any' in this class to bridge
-// devtools-protocol and patchright Protocol type incompatibilities.
 import type {Protocol} from 'devtools-protocol';
+
+import {addCdpEventListener, removeCdpEventListener} from './CdpEvents.js';
+import type {CDPSession} from './third_party/index.js';
 
 export interface ScriptInfo {
   scriptId: string;
@@ -122,9 +122,7 @@ export interface EvaluateResult {
  * It tracks loaded scripts, manages breakpoints, and provides search functionality.
  */
 export class DebuggerContext {
-  // Use 'any' to bridge devtools-protocol and patchright Protocol type incompatibilities
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  #client: any = null;
+  #client: CDPSession | null = null;
   #scripts = new Map<string, ScriptInfo>(); // scriptId -> info
   #urlToScripts = new Map<string, string[]>(); // url -> scriptId[]
   #breakpoints = new Map<string, BreakpointInfo>(); // breakpointId -> info
@@ -135,8 +133,7 @@ export class DebuggerContext {
   /**
    * Enable the debugger and start tracking scripts.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  async enable(client: any): Promise<void> {
+  async enable(client: CDPSession): Promise<void> {
     if (this.#enabled && this.#client === client) {
       return;
     }
@@ -146,11 +143,11 @@ export class DebuggerContext {
     this.#urlToScripts.clear();
 
     // Listen for script parsed events
-    client.on('Debugger.scriptParsed', this.#onScriptParsed);
+    addCdpEventListener(client, 'Debugger.scriptParsed', this.#onScriptParsed);
 
     // Listen for paused/resumed events
-    client.on('Debugger.paused', this.#onPaused);
-    client.on('Debugger.resumed', this.#onResumed);
+    addCdpEventListener(client, 'Debugger.paused', this.#onPaused);
+    addCdpEventListener(client, 'Debugger.resumed', this.#onResumed);
 
     // Enable the debugger domain
     await client.send('Debugger.enable');
@@ -173,9 +170,13 @@ export class DebuggerContext {
       return;
     }
 
-    this.#client.off('Debugger.scriptParsed', this.#onScriptParsed);
-    this.#client.off('Debugger.paused', this.#onPaused);
-    this.#client.off('Debugger.resumed', this.#onResumed);
+    removeCdpEventListener(
+      this.#client,
+      'Debugger.scriptParsed',
+      this.#onScriptParsed,
+    );
+    removeCdpEventListener(this.#client, 'Debugger.paused', this.#onPaused);
+    removeCdpEventListener(this.#client, 'Debugger.resumed', this.#onResumed);
 
     try {
       await this.#client.send('Debugger.disable');
@@ -201,8 +202,7 @@ export class DebuggerContext {
   /**
    * Get the CDP client.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getClient(): any {
+  getClient(): CDPSession | null {
     return this.#client;
   }
 
@@ -334,14 +334,20 @@ export class DebuggerContext {
    */
   #waitForPaused(timeoutMs = 10000): Promise<CallFrame> {
     return new Promise<CallFrame>((resolve, reject) => {
+      const client = this.#client;
+      if (!client) {
+        reject(new Error('Debugger not enabled'));
+        return;
+      }
+
       const timer = setTimeout(() => {
-        this.#client?.off('Debugger.paused', onPaused);
+        removeCdpEventListener(client, 'Debugger.paused', onPaused);
         reject(new Error('Timed out waiting for debugger to pause after step'));
       }, timeoutMs);
 
       const onPaused = (event: Protocol.Debugger.PausedEvent): void => {
         clearTimeout(timer);
-        this.#client?.off('Debugger.paused', onPaused);
+        removeCdpEventListener(client, 'Debugger.paused', onPaused);
         // The #onPaused handler will also fire and update #pausedState.
         // We resolve with the top frame from the event directly.
         const topFrame = event.callFrames[0];
@@ -363,7 +369,7 @@ export class DebuggerContext {
         }
       };
 
-      this.#client.on('Debugger.paused', onPaused);
+      addCdpEventListener(client, 'Debugger.paused', onPaused);
     });
   }
 
@@ -607,7 +613,9 @@ export class DebuggerContext {
             if (script.url.includes('wasm')) {
               return {scriptSource: '', bytecode: data};
             }
-            return {scriptSource: Buffer.from(data, 'base64').toString('utf-8')};
+            return {
+              scriptSource: Buffer.from(data, 'base64').toString('utf-8'),
+            };
           } else {
             return {scriptSource: decodeURIComponent(data)};
           }
@@ -681,16 +689,14 @@ export class DebuggerContext {
    * Called after debugger re-enable to restore breakpoints that
    * were wiped by Debugger.disable.
    */
-  async restoreBreakpoints(
-    breakpoints: BreakpointInfo[],
-  ): Promise<void> {
+  async restoreBreakpoints(breakpoints: BreakpointInfo[]): Promise<void> {
     if (!this.#client) {
       return;
     }
 
     for (const bp of breakpoints) {
       try {
-        const params: Record<string, unknown> = {
+        const params: Protocol.Debugger.SetBreakpointByUrlRequest = {
           lineNumber: bp.lineNumber,
           columnNumber: bp.columnNumber,
         };
@@ -715,12 +721,13 @@ export class DebuggerContext {
           columnNumber: bp.columnNumber,
           condition: bp.condition,
           isRegex: bp.isRegex,
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          locations: result.locations.map((loc: any) => ({
-            scriptId: loc.scriptId,
-            lineNumber: loc.lineNumber,
-            columnNumber: loc.columnNumber ?? 0,
-          })),
+          locations: result.locations.map(
+            (loc: Protocol.Debugger.Location) => ({
+              scriptId: loc.scriptId,
+              lineNumber: loc.lineNumber,
+              columnNumber: loc.columnNumber ?? 0,
+            }),
+          ),
         };
 
         this.#breakpoints.set(result.breakpointId, restoredInfo);
@@ -814,8 +821,7 @@ export class DebuggerContext {
       lineNumber,
       columnNumber,
       condition,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      locations: result.locations.map((loc: any) => ({
+      locations: result.locations.map((loc: Protocol.Debugger.Location) => ({
         scriptId: loc.scriptId,
         lineNumber: loc.lineNumber,
         columnNumber: loc.columnNumber ?? 0,
@@ -862,8 +868,7 @@ export class DebuggerContext {
       columnNumber,
       condition,
       isRegex: true,
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      locations: result.locations.map((loc: any) => ({
+      locations: result.locations.map((loc: Protocol.Debugger.Location) => ({
         scriptId: loc.scriptId,
         lineNumber: loc.lineNumber,
         columnNumber: loc.columnNumber ?? 0,

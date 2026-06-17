@@ -10,10 +10,7 @@ import path from 'node:path';
 
 import {setupCloak} from './cloak.js';
 import {logger} from './logger.js';
-import type {
-  Browser,
-  BrowserContext,
-} from './third_party/index.js';
+import type {Browser, BrowserContext} from './third_party/index.js';
 import {chromium} from './third_party/index.js';
 
 export interface BrowserResult {
@@ -33,8 +30,18 @@ let browserResult: BrowserResult | undefined;
 //
 // NOTE: the default path is preserved across the chrome-devtools-mcp →
 // js-reverse-mcp rename so existing users keep their login state.
-const DEFAULT_USER_DATA_DIR = path.join(os.homedir(), '.cache', 'chrome-devtools-mcp', 'chrome-profile');
-const DEFAULT_CLOAK_DATA_DIR = path.join(os.homedir(), '.cache', 'chrome-devtools-mcp', 'cloak-profile');
+const DEFAULT_USER_DATA_DIR = path.join(
+  os.homedir(),
+  '.cache',
+  'chrome-devtools-mcp',
+  'chrome-profile',
+);
+const DEFAULT_CLOAK_DATA_DIR = path.join(
+  os.homedir(),
+  '.cache',
+  'chrome-devtools-mcp',
+  'cloak-profile',
+);
 
 export async function ensureBrowserConnected(options: {
   browserURL?: string;
@@ -80,7 +87,9 @@ interface McpLaunchOptions {
   cloak?: boolean;
 }
 
-export async function launch(options: McpLaunchOptions): Promise<BrowserResult> {
+export async function launch(
+  options: McpLaunchOptions,
+): Promise<BrowserResult> {
   const {isolated} = options;
 
   // --cloak: resolve the CloakBrowser binary and fingerprint seed before
@@ -92,8 +101,8 @@ export async function launch(options: McpLaunchOptions): Promise<BrowserResult> 
   // state breaks both.
   const persistentProfileDir = isolated
     ? undefined
-    : (options.userDataDir
-        ?? (options.cloak ? DEFAULT_CLOAK_DATA_DIR : DEFAULT_USER_DATA_DIR));
+    : (options.userDataDir ??
+      (options.cloak ? DEFAULT_CLOAK_DATA_DIR : DEFAULT_USER_DATA_DIR));
   const cloakSetup = options.cloak
     ? await setupCloak(persistentProfileDir)
     : null;

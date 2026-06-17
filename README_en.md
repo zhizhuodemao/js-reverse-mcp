@@ -85,12 +85,12 @@ Then use local path in your MCP configuration:
 
 Stealth in this project is cleanly layered. The wrapper itself injects **zero** JavaScript and runs no `Object.defineProperty` hacks — those would themselves become detectable. All anti-detection happens in two well-separated layers:
 
-| Layer | Default mode | `--cloak` mode |
-| --- | --- | --- |
-| **Protocol layer** (CDP) | Patchright: skips `Runtime.enable`/`Console.enable`, evaluates in isolated worlds, strips automation launch flags | Same |
-| **Source layer** (C++ binary patches) | None — uses system Google Chrome as-is | CloakBrowser binary (49 C++ patches: `navigator.webdriver`, canvas, WebGL, audio, GPU, fonts, screen, WebRTC, TLS) |
-| **Profile directory** | `~/.cache/chrome-devtools-mcp/chrome-profile` (persistent login) | `~/.cache/chrome-devtools-mcp/cloak-profile` (physically isolated from the default) |
-| **Browser used** | Your installed Google Chrome (with Web Store, extensions, sync) | Custom Chromium build (no Google services, no Web Store) |
+| Layer                                 | Default mode                                                                                                      | `--cloak` mode                                                                                                     |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| **Protocol layer** (CDP)              | Patchright: skips `Runtime.enable`/`Console.enable`, evaluates in isolated worlds, strips automation launch flags | Same                                                                                                               |
+| **Source layer** (C++ binary patches) | None — uses system Google Chrome as-is                                                                            | CloakBrowser binary (49 C++ patches: `navigator.webdriver`, canvas, WebGL, audio, GPU, fonts, screen, WebRTC, TLS) |
+| **Profile directory**                 | `~/.cache/chrome-devtools-mcp/chrome-profile` (persistent login)                                                  | `~/.cache/chrome-devtools-mcp/cloak-profile` (physically isolated from the default)                                |
+| **Browser used**                      | Your installed Google Chrome (with Web Store, extensions, sync)                                                   | Custom Chromium build (no Google services, no Web Store)                                                           |
 
 Other navigation-level safeguards (both modes):
 
@@ -186,12 +186,12 @@ List WebSocket connections, analyze message patterns, view messages of specific 
 
 The CLI is intentionally minimal — four flags, all optional. Default behavior is what you want 99% of the time.
 
-| Option | Description | Default |
-| --- | --- | --- |
-| `--cloak` | Use CloakBrowser stealth-patched Chromium binary instead of system Chrome. Adds 49 source-level C++ fingerprint patches. Binary auto-downloads (~200MB) on first use. Identity is persisted per profile. See [docs/cloak.en.md](docs/cloak.en.md). | `false` |
-| `--isolated` | Use a temporary user data directory (cookies/localStorage not persisted, auto-cleaned on close) | `false` |
-| `--browserUrl, -u` | Connect to a running Chrome instance via CDP HTTP endpoint (e.g. `http://127.0.0.1:9222`). The MCP probes it to find the WebSocket debugger URL. See [docs/cdp-endpoint.en.md](docs/cdp-endpoint.en.md) for how to obtain this endpoint from local Chrome, AdsPower, BitBrowser, etc. | – |
-| `--logFile` | Path to write debug logs (also set env `DEBUG=*` for verbose logs) | – |
+| Option             | Description                                                                                                                                                                                                                                                                           | Default |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------- |
+| `--cloak`          | Use CloakBrowser stealth-patched Chromium binary instead of system Chrome. Adds 49 source-level C++ fingerprint patches. Binary auto-downloads (~200MB) on first use. Identity is persisted per profile. See [docs/cloak.en.md](docs/cloak.en.md).                                    | `false` |
+| `--isolated`       | Use a temporary user data directory (cookies/localStorage not persisted, auto-cleaned on close)                                                                                                                                                                                       | `false` |
+| `--browserUrl, -u` | Connect to a running Chrome instance via CDP HTTP endpoint (e.g. `http://127.0.0.1:9222`). The MCP probes it to find the WebSocket debugger URL. See [docs/cdp-endpoint.en.md](docs/cdp-endpoint.en.md) for how to obtain this endpoint from local Chrome, AdsPower, BitBrowser, etc. | –       |
+| `--logFile`        | Path to write debug logs (also set env `DEBUG=*` for verbose logs)                                                                                                                                                                                                                    | –       |
 
 ### Example Configurations
 
@@ -211,9 +211,11 @@ The CLI is intentionally minimal — four flags, all optional. Default behavior 
 **`--cloak` — strong anti-bot sites** (Cloudflare Turnstile / FingerprintJS / DataDome):
 
 > **Strongly recommended: pre-download the binary first** (one-time, ~30–60 seconds). Without this, the first `--cloak` MCP launch silently downloads ~200MB and looks like the server is hanging:
+>
 > ```bash
 > npx cloakbrowser install
 > ```
+>
 > The `cloakbrowser` package is already pulled in via `optionalDependencies`; this command just triggers its built-in binary download with a visible progress bar.
 
 ```json

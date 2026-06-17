@@ -6,12 +6,10 @@
 
 import type {Protocol} from 'devtools-protocol';
 
+import {addCdpEventListener, removeCdpEventListener} from './CdpEvents.js';
 import type {CdpSessionProvider} from './CdpSessionProvider.js';
 import type {RequestInitiator} from './PageCollector.js';
-import type {
-  BrowserContext,
-  Page,
-} from './third_party/index.js';
+import type {BrowserContext, Page} from './third_party/index.js';
 
 /**
  * WebSocket connection status.
@@ -149,7 +147,9 @@ export class WebSocketCollector {
       const connectionMap = this.#connectionMap.get(page)!;
       const idGenerator = this.#idGenerators.get(page)!;
 
-      const onCreated = (event: Protocol.Network.WebSocketCreatedEvent): void => {
+      const onCreated = (
+        event: Protocol.Network.WebSocketCreatedEvent,
+      ): void => {
         const wsData: WebSocketDataWithId = {
           connection: {
             requestId: event.requestId,
@@ -221,10 +221,14 @@ export class WebSocketCollector {
         this.#splitAfterNavigation(page);
       };
 
-      client.on('Network.webSocketCreated' as any, onCreated);
-      client.on('Network.webSocketFrameSent' as any, onFrameSent);
-      client.on('Network.webSocketFrameReceived' as any, onFrameReceived);
-      client.on('Network.webSocketClosed' as any, onClosed);
+      addCdpEventListener(client, 'Network.webSocketCreated', onCreated);
+      addCdpEventListener(client, 'Network.webSocketFrameSent', onFrameSent);
+      addCdpEventListener(
+        client,
+        'Network.webSocketFrameReceived',
+        onFrameReceived,
+      );
+      addCdpEventListener(client, 'Network.webSocketClosed', onClosed);
       page.on('framenavigated', frame => {
         if (frame === page.mainFrame()) {
           onFrameNavigated();
@@ -232,10 +236,18 @@ export class WebSocketCollector {
       });
 
       this.#cdpCleanup.set(page, () => {
-        client.off('Network.webSocketCreated' as any, onCreated);
-        client.off('Network.webSocketFrameSent' as any, onFrameSent);
-        client.off('Network.webSocketFrameReceived' as any, onFrameReceived);
-        client.off('Network.webSocketClosed' as any, onClosed);
+        removeCdpEventListener(client, 'Network.webSocketCreated', onCreated);
+        removeCdpEventListener(
+          client,
+          'Network.webSocketFrameSent',
+          onFrameSent,
+        );
+        removeCdpEventListener(
+          client,
+          'Network.webSocketFrameReceived',
+          onFrameReceived,
+        );
+        removeCdpEventListener(client, 'Network.webSocketClosed', onClosed);
       });
     } catch {
       // Page might already be closed

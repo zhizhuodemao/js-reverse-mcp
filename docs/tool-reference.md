@@ -6,6 +6,8 @@
   - [`navigate_page`](#navigate_page)
   - [`new_page`](#new_page)
   - [`select_page`](#select_page)
+- **[Browser state](#browser-state)** (1 tools)
+  - [`clear_site_data`](#clear_site_data)
 - **[Network](#network)** (2 tools)
   - [`get_websocket_messages`](#get_websocket_messages)
   - [`list_network_requests`](#list_network_requests)
@@ -60,6 +62,16 @@
 **Parameters:**
 
 - **pageIdx** (number) _(optional)_: The index of the page to select. If omitted, lists all pages without changing selection.
+
+---
+
+## Browser state
+
+### `clear_site_data`
+
+**Description:** Clear browser state to create a clean replay environment for the currently selected page. This clears all cookies for all sites and pages sharing the current browser context, clears browser HTTP cache, clears all persistent storage for the selected page's origin, and clears current page sessionStorage. This tool does not reload the page. Cookie cleanup is browser-context-wide; non-cookie storage cleanup is scoped to the selected page origin.
+
+**Parameters:** None
 
 ---
 

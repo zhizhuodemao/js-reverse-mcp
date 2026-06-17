@@ -6,7 +6,10 @@
 
 import type {CDPConnection as devtools} from '../node_modules/chrome-devtools-frontend/mcp/mcp.js';
 
+import {addCdpEventListener} from './CdpEvents.js';
 import type {CDPSession} from './third_party/index.js';
+
+type CdpSend = (method: string, params: unknown) => Promise<unknown>;
 
 /**
  * Adapts a Playwright CDPSession to the DevTools CDPConnection interface.
@@ -23,7 +26,7 @@ export class PuppeteerDevToolsConnection implements devtools.CDPConnection {
   readonly #observers = new Set<devtools.CDPConnectionObserver>();
   readonly #sessionId: string;
   readonly #childSessions = new Map<string, CDPSession>();
-  readonly #eventHandlers = new Map<string, (...args: any[]) => void>();
+  readonly #eventHandlers = new Map<string, (payload: unknown) => void>();
 
   constructor(session: CDPSession, sessionId?: string) {
     this.#session = session;
@@ -33,14 +36,14 @@ export class PuppeteerDevToolsConnection implements devtools.CDPConnection {
     this.#startForwardingCdpEvents(session, this.#sessionId);
 
     // Listen for child session attachment
-    this.#session.on('Target.attachedToTarget' as any, (event: any) => {
+    this.#session.on('Target.attachedToTarget', event => {
       const childSessionId = event.sessionId;
       // We can't create separate CDPSession objects from Playwright for auto-attached targets,
       // but we can track their session IDs for routing
       this.#childSessions.set(childSessionId, session);
     });
 
-    this.#session.on('Target.detachedFromTarget' as any, (event: any) => {
+    this.#session.on('Target.detachedFromTarget', event => {
       this.#childSessions.delete(event.sessionId);
     });
   }
@@ -57,12 +60,10 @@ export class PuppeteerDevToolsConnection implements devtools.CDPConnection {
     }
 
     // For the main session or child sessions, route through our CDP session
-    /* eslint-disable @typescript-eslint/no-explicit-any */
-    return this.#session
-      .send(method as any, params as any)
-      .then(result => ({result}))
-      .catch(error => ({error})) as any;
-    /* eslint-enable @typescript-eslint/no-explicit-any */
+    const send = this.#session.send.bind(this.#session) as unknown as CdpSend;
+    return send(method, params)
+      .then(result => ({result: result as devtools.CommandResult<T>}))
+      .catch((error: unknown) => ({error: error as devtools.CDPError}));
   }
 
   observe(observer: devtools.CDPConnectionObserver): void {
@@ -76,7 +77,7 @@ export class PuppeteerDevToolsConnection implements devtools.CDPConnection {
   #startForwardingCdpEvents(session: CDPSession, sessionId: string): void {
     // In Playwright, we can't use wildcard listeners like session.on('*', handler).
     // Instead, register handlers for commonly used CDP event domains.
-    const cdpDomains = [
+    const cdpDomains: devtools.Event[] = [
       'Debugger.scriptParsed',
       'Debugger.paused',
       'Debugger.resumed',
@@ -101,17 +102,17 @@ export class PuppeteerDevToolsConnection implements devtools.CDPConnection {
     ];
 
     for (const eventName of cdpDomains) {
-      const handler = (event: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+      const handler = (event: unknown) => {
         this.#observers.forEach(observer =>
           observer.onEvent({
-            method: eventName as devtools.Event,
+            method: eventName,
             sessionId,
-            params: event,
+            params: event as devtools.EventParams<typeof eventName>,
           }),
         );
       };
       this.#eventHandlers.set(`${sessionId}:${eventName}`, handler);
-      session.on(eventName as any, handler);
+      addCdpEventListener(session, eventName, handler);
     }
   }
 }
