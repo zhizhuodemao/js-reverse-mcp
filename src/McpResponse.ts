@@ -16,6 +16,7 @@ import {
   getFormattedHeaderValue,
   getFormattedResponseBody,
   getFormattedRequestBody,
+  getNetworkRequestExportHints,
   getShortDescriptionForRequestAsync,
   getStatusFromRequestAsync,
 } from './formatters/networkFormatter.js';
@@ -391,13 +392,17 @@ export class McpResponse implements Response {
       const selectedFrame = context.getSelectedFrame();
       const mainFrame = context.getSelectedPage().mainFrame();
       if (selectedFrame !== mainFrame) {
-        const name = selectedFrame.name() ? ` name="${selectedFrame.name()}"` : '';
+        const name = selectedFrame.name()
+          ? ` name="${selectedFrame.name()}"`
+          : '';
         response.push(`## Selected Frame`);
         response.push(`${selectedFrame.url()}${name}`);
       }
     }
 
-    response.push(...(await this.#formatNetworkRequestData(context, data.bodies)));
+    response.push(
+      ...(await this.#formatNetworkRequestData(context, data.bodies)),
+    );
     response.push(...this.#formatConsoleData(data.consoleData));
 
     if (this.#networkRequestsOptions?.include) {
@@ -603,6 +608,14 @@ export class McpResponse implements Response {
     if (failure) {
       response.push(`### Request failed with`);
       response.push(failure.errorText);
+    }
+
+    const exportHints = await getNetworkRequestExportHints(httpRequest, id);
+    if (exportHints.length) {
+      response.push(`### Export hints`);
+      for (const hint of exportHints) {
+        response.push(`- ${hint}`);
+      }
     }
 
     // In Playwright, there's no redirectChain() - use redirectedFrom() instead

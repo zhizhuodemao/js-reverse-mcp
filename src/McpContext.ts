@@ -87,10 +87,7 @@ export class McpContext implements Context {
 
   #navigationTimeout = NAVIGATION_TIMEOUT;
 
-  private constructor(
-    browserContext: BrowserContext,
-    logger: Debugger,
-  ) {
+  private constructor(browserContext: BrowserContext, logger: Debugger) {
     this.browserContext = browserContext;
     this.sessionProvider = new CdpSessionProvider(browserContext);
     this.logger = logger;
@@ -528,9 +525,7 @@ export class McpContext implements Context {
     mimeType: 'image/png' | 'image/jpeg' | 'image/webp',
   ): Promise<{filename: string}> {
     try {
-      const dir = await fs.mkdtemp(
-        path.join(os.tmpdir(), 'js-reverse-mcp-'),
-      );
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'js-reverse-mcp-'));
 
       const filename = path.join(
         dir,
@@ -550,7 +545,7 @@ export class McpContext implements Context {
     try {
       const filePath = path.resolve(filename);
       await fs.writeFile(filePath, data);
-      return {filename};
+      return {filename: filePath};
     } catch (err) {
       this.logger(err);
       throw new Error('Could not save a screenshot to a file', {cause: err});

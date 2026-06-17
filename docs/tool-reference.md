@@ -87,11 +87,13 @@
 
 ### `list_network_requests`
 
-**Description:** List network requests for the currently selected page since the last navigation. Results are sorted newest-first. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate. Pass reqid to get a single request's full details.
+**Description:** List network requests for the currently selected page since the last navigation. Results are sorted newest-first. By default returns the 20 most recent requests; use pageSize/pageIdx to paginate. Pass reqid to get a single request's full details. When exact bytes, full bodies, replay inputs, signature inputs, large request bodies, long GET query payloads, binary responses, or data for external decoding are needed, pass reqid with outputFile to export the selected data. For GET requests, payload-like data means parsed URL query parameters.
 
 **Parameters:**
 
 - **includePreservedRequests** (boolean) _(optional)_: Set to true to return the preserved requests over the last 3 navigations.
+- **outputFile** (string) _(optional)_: When reqid is provided, save network data to this local file instead of returning only inline text. Use this for exact bytes, large bodies, long GET query payloads, binary responses, replay/signature inputs, or data that will be decoded with external tools. The response reports the resolved absolute path; use that path with [`evaluate_script`](#evaluate_script) localFilePath when browser-side processing is needed.
+- **outputPart** (enum: "all", "responseBody", "requestBody", "queryParams") _(optional)_: Which part to export when outputFile is provided. "responseBody" saves raw response bytes, "requestBody" saves captured request body bytes, "queryParams" saves parsed URL query parameters as JSON, and "all" saves a JSON bundle with metadata, headers, query params, and body content/metadata. Defaults to "all".
 - **pageIdx** (integer) _(optional)_: Page number to return (0-based). When omitted, returns the first page.
 - **pageSize** (integer) _(optional)_: Maximum number of requests to return. Defaults to 20.
 - **reqid** (number) _(optional)_: The reqid of a specific network request to get full details for. If omitted, lists all requests.
@@ -105,7 +107,7 @@
 ### `evaluate_script`
 
 **Description:** Evaluate a JavaScript function inside the currently selected page. Returns the response as JSON
-so returned values have to JSON-serializable. When execution is paused at a breakpoint, automatically evaluates in the paused call frame context.
+so returned values have to JSON-serializable. When execution is paused at a breakpoint, automatically evaluates in the paused call frame context. Use localFilePath when the function needs one local data file, commonly a network body or JSON exported by another tool. The MCP server reads the file and passes it as localFile; browser JavaScript does not read local paths.
 
 **Parameters:**
 
@@ -116,11 +118,10 @@ so returned values have to JSON-serializable. When execution is paused at a brea
 }` or `async () => {
   return await fetch("example.com")
 }`.
-  Example with arguments: `(el) => {
-  return el.innerText;
-}`
+  If localFilePath is provided, the function receives one argument: `async ({ localFile }) => { ... }`. Use localFile.text when present for UTF-8 text/JSON and localFile.base64 for exact bytes. To keep data for later calls, assign it explicitly in JavaScript, for example `window.__mcpPayload = JSON.parse(localFile.text)` with mainWorld=true.
 
-- **mainWorld** (boolean) _(optional)_: Execute the function in the page main world instead of the default isolated context. Use this when you need to access page-defined globals (e.g. window.bdms, window.app). The function must be synchronous and return a JSON-serializable value.
+- **localFilePath** (string) _(optional)_: Absolute path to one local file to pass to the evaluated function as localFile. Relative paths, file:// URLs, globs, ~, and directories are rejected. If provided, write the function as async ({ localFile }) => { ... }. Use localFile.text when present for UTF-8 text/JSON and localFile.base64 for exact bytes.
+- **mainWorld** (boolean) _(optional)_: Execute the function in the page main world instead of the default isolated context. Use this when you need to access page-defined globals (e.g. window.bdms, window.app). Async functions are supported, and returned values must be JSON-serializable unless outputFile is used for binary data.
 - **outputFile** (string) _(optional)_: If provided, saves the evaluation result to this local file path instead of returning it in the chat. Useful for dumping large data, ArrayBuffer, or Uint8Array memory regions. The script should return the data you want to dump.
 
 ---

@@ -4,6 +4,10 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import {isUtf8} from 'node:buffer';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
 import {zod} from '../third_party/index.js';
 import type {JSHandle} from '../third_party/index.js';
 
@@ -12,6 +16,16 @@ import {defineTool} from './ToolDefinition.js';
 
 // Default script evaluation timeout in milliseconds (30 seconds)
 const DEFAULT_SCRIPT_TIMEOUT = 30000;
+const MAX_LOCAL_FILE_BYTES = 5 * 1024 * 1024;
+const MAX_PAUSED_LOCAL_FILE_BYTES = 512 * 1024;
+
+interface LocalFileInput {
+  path: string;
+  name: string;
+  size: number;
+  base64: string;
+  text?: string;
+}
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -26,10 +40,65 @@ function withTimeout<T>(
   ]);
 }
 
+async function loadLocalFile(filePath: string): Promise<LocalFileInput> {
+  if (filePath.startsWith('file://')) {
+    throw new Error(
+      'localFilePath must be an absolute path, not a file:// URL.',
+    );
+  }
+
+  if (filePath.startsWith('~')) {
+    throw new Error(
+      'localFilePath must be an absolute path; ~ is not expanded.',
+    );
+  }
+
+  if (!path.isAbsolute(filePath)) {
+    throw new Error('localFilePath must be an absolute path.');
+  }
+
+  if (/[{}[\]*?]/.test(filePath)) {
+    throw new Error(
+      'localFilePath must point to one file; globs are not supported.',
+    );
+  }
+
+  const resolvedPath = path.resolve(filePath);
+  const stat = await fs.stat(resolvedPath).catch(error => {
+    throw new Error(
+      `Could not read localFilePath: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
+
+  if (!stat.isFile()) {
+    throw new Error('localFilePath must point to a regular file.');
+  }
+
+  if (stat.size > MAX_LOCAL_FILE_BYTES) {
+    throw new Error(
+      `localFilePath is too large (${stat.size} bytes). Maximum supported size is ${MAX_LOCAL_FILE_BYTES} bytes.`,
+    );
+  }
+
+  const data = await fs.readFile(resolvedPath);
+  const localFile: LocalFileInput = {
+    path: resolvedPath,
+    name: path.basename(resolvedPath),
+    size: data.length,
+    base64: data.toString('base64'),
+  };
+
+  if (isUtf8(data)) {
+    localFile.text = data.toString('utf8');
+  }
+
+  return localFile;
+}
+
 export const evaluateScript = defineTool({
   name: 'evaluate_script',
   description: `Evaluate a JavaScript function inside the currently selected page. Returns the response as JSON
-so returned values have to JSON-serializable. When execution is paused at a breakpoint, automatically evaluates in the paused call frame context.`,
+so returned values have to JSON-serializable. When execution is paused at a breakpoint, automatically evaluates in the paused call frame context. Use localFilePath when the function needs one local data file, commonly a network body or JSON exported by another tool. The MCP server reads the file and passes it as localFile; browser JavaScript does not read local paths.`,
   annotations: {
     category: ToolCategory.DEBUGGING,
     readOnlyHint: false,
@@ -42,9 +111,7 @@ Example without arguments: \`() => {
 }\` or \`async () => {
   return await fetch("example.com")
 }\`.
-Example with arguments: \`(el) => {
-  return el.innerText;
-}\`
+If localFilePath is provided, the function receives one argument: \`async ({ localFile }) => { ... }\`. Use localFile.text when present for UTF-8 text/JSON and localFile.base64 for exact bytes. To keep data for later calls, assign it explicitly in JavaScript, for example \`window.__mcpPayload = JSON.parse(localFile.text)\` with mainWorld=true.
 `,
     ),
     mainWorld: zod
@@ -54,7 +121,7 @@ Example with arguments: \`(el) => {
       .describe(
         'Execute the function in the page main world instead of the default isolated context. ' +
           'Use this when you need to access page-defined globals (e.g. window.bdms, window.app). ' +
-          'The function must be synchronous and return a JSON-serializable value.',
+          'Async functions are supported, and returned values must be JSON-serializable unless outputFile is used for binary data.',
       ),
     frameIndex: zod
       .number()
@@ -70,13 +137,38 @@ Example with arguments: \`(el) => {
       .describe(
         'If provided, saves the evaluation result to this local file path instead of returning it in the chat. Useful for dumping large data, ArrayBuffer, or Uint8Array memory regions. The script should return the data you want to dump.',
       ),
+    localFilePath: zod
+      .string()
+      .optional()
+      .describe(
+        'Absolute path to one local file to pass to the evaluated function as localFile. Relative paths, file:// URLs, globs, ~, and directories are rejected. If provided, write the function as async ({ localFile }) => { ... }. Use localFile.text when present for UTF-8 text/JSON and localFile.base64 for exact bytes.',
+      ),
   },
   handler: async (request, response, context) => {
-    const {function: fnString, mainWorld, frameIndex, outputFile} = request.params;
+    const {
+      function: fnString,
+      mainWorld,
+      frameIndex,
+      outputFile,
+      localFilePath,
+    } = request.params;
+    const localFile = localFilePath
+      ? await loadLocalFile(localFilePath)
+      : undefined;
 
-    const wrapResultSync = (fn: string) => `(() => {
+    if (localFile) {
+      response.appendResponseLine(
+        `Loaded local file ${localFile.path} (${localFile.size} bytes).`,
+      );
+    }
+
+    const callExpression = localFile
+      ? `(${fnString})(${JSON.stringify({localFile})})`
+      : `(${fnString})()`;
+
+    const wrapResultSync = () => `(() => {
       try {
-        const result = (${fn})();
+        const result = ${callExpression};
         if (result instanceof ArrayBuffer || ArrayBuffer.isView(result)) {
           const buffer = result.buffer || result;
           const bytes = new Uint8Array(buffer, result.byteOffset || 0, result.byteLength || result.length);
@@ -93,9 +185,9 @@ Example with arguments: \`(el) => {
       }
     })()`;
 
-    const wrapResultAsync = (fn: string) => `async () => {
+    const wrapResultAsync = () => `async () => {
       try {
-        const result = await (${fn})();
+        const result = await ${callExpression};
         if (result instanceof ArrayBuffer || ArrayBuffer.isView(result)) {
           const buffer = result.buffer || result;
           const bytes = new Uint8Array(buffer, result.byteOffset || 0, result.byteLength || result.length);
@@ -122,13 +214,13 @@ Example with arguments: \`(el) => {
     }`;
 
     const handleEvalResult = async (rawString: string) => {
-      let parsed: { type: string, data: string };
+      let parsed: {type: string; data: string};
       try {
         parsed = JSON.parse(rawString);
       } catch {
-        parsed = { type: 'json', data: rawString };
+        parsed = {type: 'json', data: rawString};
       }
-      
+
       if (parsed.type === 'error') {
         throw new Error(`Script evaluation error: ${parsed.data}`);
       }
@@ -137,18 +229,26 @@ Example with arguments: \`(el) => {
         if (parsed.type === 'base64') {
           const binaryData = Buffer.from(parsed.data, 'base64');
           const res = await context.saveFile(binaryData, outputFile);
-          response.appendResponseLine(`Saved binary memory dump to ${res.filename} (${binaryData.length} bytes).`);
+          response.appendResponseLine(
+            `Saved binary memory dump to ${res.filename} (${binaryData.length} bytes).`,
+          );
         } else {
-          const textData = new TextEncoder().encode(parsed.data === undefined ? 'undefined' : parsed.data);
+          const textData = new TextEncoder().encode(
+            parsed.data === undefined ? 'undefined' : parsed.data,
+          );
           const res = await context.saveFile(textData, outputFile);
-          response.appendResponseLine(`Saved JSON result to ${res.filename} (${textData.length} bytes).`);
+          response.appendResponseLine(
+            `Saved JSON result to ${res.filename} (${textData.length} bytes).`,
+          );
         }
         return;
       }
 
       response.appendResponseLine('Script ran on page and returned:');
       if (parsed.type === 'base64') {
-        response.appendResponseLine(`[Binary Data: ${Buffer.from(parsed.data, 'base64').length} bytes. Use outputFile to save to disk.]`);
+        response.appendResponseLine(
+          `[Binary Data: ${Buffer.from(parsed.data, 'base64').length} bytes. Use outputFile to save to disk.]`,
+        );
       } else {
         response.appendResponseLine('```json');
         response.appendResponseLine(`${parsed.data ?? 'undefined'}`);
@@ -158,6 +258,12 @@ Example with arguments: \`(el) => {
 
     const debugger_ = context.debuggerContext;
     if (debugger_.isEnabled() && debugger_.isPaused()) {
+      if (localFile && localFile.size > MAX_PAUSED_LOCAL_FILE_BYTES) {
+        throw new Error(
+          `localFilePath is too large for paused call-frame evaluation (${localFile.size} bytes). Maximum supported paused size is ${MAX_PAUSED_LOCAL_FILE_BYTES} bytes.`,
+        );
+      }
+
       const pausedState = debugger_.getPausedState();
       const frameIdx = frameIndex ?? 0;
       if (frameIdx < 0 || frameIdx >= pausedState.callFrames.length) {
@@ -169,7 +275,7 @@ Example with arguments: \`(el) => {
       if (callFrameId) {
         const result = await debugger_.evaluateOnCallFrame(
           callFrameId,
-          wrapResultSync(fnString),
+          wrapResultSync(),
           {returnByValue: true},
         );
 
@@ -189,14 +295,15 @@ Example with arguments: \`(el) => {
       const frame = context.getSelectedFrame();
       const bridgeId = `__mcp_bridge_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       const result = await withTimeout(
-        frame.evaluate(async ({fn, id}) => {
-          const el = document.createElement('div');
-          el.id = id;
-          el.style.display = 'none';
-          document.documentElement.appendChild(el);
+        frame.evaluate(
+          async ({fn, id}) => {
+            const el = document.createElement('div');
+            el.id = id;
+            el.style.display = 'none';
+            document.documentElement.appendChild(el);
 
-          const script = document.createElement('script');
-          script.textContent = `
+            const script = document.createElement('script');
+            script.textContent = `
             (async function() {
               var el = document.getElementById(${JSON.stringify(id)});
               try {
@@ -207,28 +314,31 @@ Example with arguments: \`(el) => {
               }
             })();
           `;
-          document.documentElement.appendChild(script);
-          script.remove();
+            document.documentElement.appendChild(script);
+            script.remove();
 
-          // Wait for result
-          return new Promise<string>((resolve, reject) => {
-            const check = () => {
-              if (!document.getElementById(id)) return reject(new Error('Bridge element removed'));
-              const err = el.getAttribute('data-error');
-              if (err) {
-                el.remove();
-                return reject(new Error(err));
-              }
-              const res = el.getAttribute('data-result');
-              if (res !== null) {
-                el.remove();
-                return resolve(res);
-              }
-              setTimeout(check, 50);
-            };
-            check();
-          });
-        }, {fn: wrapResultAsync(fnString), id: bridgeId}),
+            // Wait for result
+            return new Promise<string>((resolve, reject) => {
+              const check = () => {
+                if (!document.getElementById(id))
+                  return reject(new Error('Bridge element removed'));
+                const err = el.getAttribute('data-error');
+                if (err) {
+                  el.remove();
+                  return reject(new Error(err));
+                }
+                const res = el.getAttribute('data-result');
+                if (res !== null) {
+                  el.remove();
+                  return resolve(res);
+                }
+                setTimeout(check, 50);
+              };
+              check();
+            });
+          },
+          {fn: wrapResultAsync(), id: bridgeId},
+        ),
         DEFAULT_SCRIPT_TIMEOUT,
         'Script evaluation timed out',
       );
@@ -241,7 +351,7 @@ Example with arguments: \`(el) => {
     try {
       const frame = context.getSelectedFrame();
       fnHandle = await withTimeout(
-        frame.evaluateHandle(`(${wrapResultAsync(fnString)})`),
+        frame.evaluateHandle(`(${wrapResultAsync()})`),
         DEFAULT_SCRIPT_TIMEOUT,
         'Script evaluation timed out',
       );
