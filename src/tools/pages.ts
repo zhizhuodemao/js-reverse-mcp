@@ -18,10 +18,10 @@ export type NavigationWaitResult =
   | {status: 'paused'}
   | {status: 'error'; error: unknown};
 
-type PauseStateReader = {
+interface PauseStateReader {
   isEnabled(): boolean;
   isPaused(): boolean;
-};
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -161,16 +161,7 @@ export const navigatePage = defineTool({
       request.params.type = 'url';
     }
 
-    // Auto-resume if execution is paused at a breakpoint before navigating,
-    // otherwise the navigation will hang waiting for the paused script.
     const debugger_ = context.debuggerContext;
-    if (debugger_.isEnabled() && debugger_.isPaused()) {
-      try {
-        await debugger_.resume();
-      } catch {
-        // Ignore resume errors
-      }
-    }
 
     // Clear stale script IDs BEFORE navigation. The scriptParsed listener
     // remains active and will capture new scripts as the page loads.
@@ -189,6 +180,8 @@ export const navigatePage = defineTool({
     // Use plain navigation without waitForEventsAfterAction to avoid creating
     // a CDP session during navigation. Anti-bot systems detect the extra
     // CDP session that WaitForHelper creates (Page.frameStartedNavigating listener).
+    let navigationCompleted = false;
+
     switch (request.params.type) {
       case 'url':
         if (!request.params.url) {
@@ -204,6 +197,7 @@ export const navigatePage = defineTool({
             debugger_,
           );
           if (result.status === 'completed') {
+            navigationCompleted = true;
             response.appendResponseLine(
               `Successfully navigated to ${request.params.url}.`,
             );
@@ -231,6 +225,7 @@ export const navigatePage = defineTool({
             debugger_,
           );
           if (result.status === 'completed') {
+            navigationCompleted = true;
             response.appendResponseLine(
               `Successfully navigated back to ${page.url()}.`,
             );
@@ -258,6 +253,7 @@ export const navigatePage = defineTool({
             debugger_,
           );
           if (result.status === 'completed') {
+            navigationCompleted = true;
             response.appendResponseLine(
               `Successfully navigated forward to ${page.url()}.`,
             );
@@ -285,6 +281,7 @@ export const navigatePage = defineTool({
             debugger_,
           );
           if (result.status === 'completed') {
+            navigationCompleted = true;
             response.appendResponseLine(`Successfully reloaded the page.`);
             response.appendResponseLine(
               'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
@@ -304,7 +301,7 @@ export const navigatePage = defineTool({
 
     // Restore XHR breakpoints after navigation — Chrome resets
     // DOMDebugger state on page navigation.
-    if (debugger_.isEnabled()) {
+    if (navigationCompleted && debugger_.isEnabled()) {
       await debugger_.restoreXHRBreakpoints();
     }
 

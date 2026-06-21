@@ -45,6 +45,13 @@ export const clearSiteData = defineTool({
   },
   schema: {},
   handler: async (_request, response, context) => {
+    const debugger_ = context.debuggerContext;
+    if (debugger_.isEnabled() && debugger_.isPaused()) {
+      throw new Error(
+        'Execution is paused at a breakpoint. clear_site_data needs page JavaScript to clear sessionStorage, which cannot complete while execution is paused. Resume execution with pause_or_resume, then retry clear_site_data.',
+      );
+    }
+
     const page = context.getSelectedPage();
     const pageUrl = page.url();
     const url = new URL(pageUrl);

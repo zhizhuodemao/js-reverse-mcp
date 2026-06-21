@@ -21,11 +21,14 @@ import {
   getFormattedSetCookieEntries,
   getHeadersExcludingSetCookie,
   getNetworkRequestExportHints,
+  getPendingRequestStatus,
   getRequestHeadersArray,
+  getResponseIfCompleted,
   getResponseHeadersArray,
   getShortDescriptionForRequestAsync,
   getSetCookieHeaders,
   getStatusFromRequestAsync,
+  isRequestPending,
 } from './formatters/networkFormatter.js';
 import {
   formatWebSocketConnectionShort,
@@ -233,8 +236,7 @@ export class McpResponse implements Response {
 
       bodies.requestBody = await getFormattedRequestBody(request);
 
-      // In Playwright, request.response() is async
-      const response = await request.response();
+      const response = await getResponseIfCompleted(request);
       if (response) {
         bodies.responseBody = await getFormattedResponseBody(response);
       }
@@ -597,7 +599,7 @@ export class McpResponse implements Response {
       response.push(data.requestBody);
     }
 
-    const httpResponse = await httpRequest.response();
+    const httpResponse = await getResponseIfCompleted(httpRequest);
     if (httpResponse) {
       const responseHeaders = await getResponseHeadersArray(httpResponse);
       const responseHeadersWithoutSetCookie =
@@ -616,6 +618,13 @@ export class McpResponse implements Response {
         response.push(`### Set-Cookie`);
         response.push(...getFormattedSetCookieEntries(setCookieHeaders));
       }
+    }
+
+    if (isRequestPending(httpRequest)) {
+      response.push(`### Pending Request`);
+      response.push(
+        `${getPendingRequestStatus()} Resume execution with pause_or_resume, then retry if you need response data.`,
+      );
     }
 
     if (data.responseBody) {

@@ -59,6 +59,10 @@ function addCrossLinks(text: string, tools: ToolWithAnnotations[]): string {
   return result;
 }
 
+function getCategoryName(category: string): string {
+  return labels[category] ?? category;
+}
+
 function generateToolsTOC(
   categories: Record<string, ToolWithAnnotations[]>,
   sortedCategories: string[],
@@ -67,7 +71,7 @@ function generateToolsTOC(
 
   for (const category of sortedCategories) {
     const categoryTools = categories[category];
-    const categoryName = labels[category];
+    const categoryName = getCategoryName(category);
     toc += `- **${categoryName}** (${categoryTools.length} tools)\n`;
 
     // Sort tools within category for TOC
@@ -223,7 +227,7 @@ async function generateToolDocumentation(): Promise<void> {
     // Generate table of contents
     for (const category of sortedCategories) {
       const categoryTools = categories[category];
-      const categoryName = labels[category];
+      const categoryName = getCategoryName(category);
       const anchorName = categoryName.toLowerCase().replace(/\s+/g, '-');
       markdown += `- **[${categoryName}](#${anchorName})** (${categoryTools.length} tools)\n`;
 
@@ -239,7 +243,7 @@ async function generateToolDocumentation(): Promise<void> {
 
     for (const category of sortedCategories) {
       const categoryTools = categories[category];
-      const categoryName = labels[category];
+      const categoryName = getCategoryName(category);
 
       markdown += `## ${categoryName}\n\n`;
 

@@ -19,13 +19,33 @@ export class Mutex {
   #acquirers: Array<() => void> = [];
 
   // This is FIFO.
-  async acquire(): Promise<InstanceType<typeof Mutex.Guard>> {
+  async acquire(
+    options: {timeoutMs?: number} = {},
+  ): Promise<InstanceType<typeof Mutex.Guard>> {
     if (!this.#locked) {
       this.#locked = true;
       return new Mutex.Guard(this);
     }
-    const {resolve, promise} = Promise.withResolvers<void>();
-    this.#acquirers.push(resolve);
+
+    const {resolve, reject, promise} = Promise.withResolvers<void>();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
+    const acquire = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      resolve();
+    };
+
+    this.#acquirers.push(acquire);
+
+    if (options.timeoutMs !== undefined) {
+      timeoutId = setTimeout(() => {
+        this.#acquirers = this.#acquirers.filter(item => item !== acquire);
+        reject(new Error('Timed out waiting for another tool call to finish'));
+      }, options.timeoutMs);
+    }
+
     await promise;
     return new Mutex.Guard(this);
   }

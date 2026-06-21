@@ -627,12 +627,11 @@ export const searchInSources = defineTool({
 /**
  * Remove breakpoint(s). Supports removing a single code breakpoint by ID,
  * a single XHR breakpoint by URL, or all breakpoints at once.
- * Automatically resumes execution if currently paused.
  */
 export const removeBreakpoint = defineTool({
   name: 'remove_breakpoint',
   description:
-    'Removes breakpoints. Pass breakpointId to remove a code breakpoint, url to remove an XHR breakpoint, or neither to remove ALL breakpoints (code + XHR). If a breakpoint is removed while execution is paused, execution is automatically resumed.',
+    'Removes breakpoints. Pass breakpointId to remove a code breakpoint, url to remove an XHR breakpoint, or neither to remove ALL breakpoints (code + XHR).',
   annotations: {
     title: 'Remove Breakpoint',
     category: ToolCategory.REVERSE_ENGINEERING,
@@ -688,10 +687,10 @@ export const removeBreakpoint = defineTool({
         );
       }
 
-      // Auto-resume if currently paused
       if (debugger_.isPaused()) {
-        await debugger_.resume();
-        response.appendResponseLine('▶️ Execution resumed.');
+        response.appendResponseLine(
+          'Execution is still paused. Use pause_or_resume when you are ready to continue.',
+        );
       }
     } catch (error) {
       response.appendResponseLine(

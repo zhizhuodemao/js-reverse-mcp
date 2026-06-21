@@ -8,8 +8,10 @@ import assert from 'node:assert/strict';
 import {test} from 'node:test';
 
 import {
+  exportNetworkRequestPart,
   getFormattedHeaderEntries,
   getShortDescriptionForRequestAsync,
+  getStatusFromRequestAsync,
   headersContainSensitiveValues,
 } from '../../src/formatters/networkFormatter.js';
 import type {HTTPRequest} from '../../src/third_party/index.js';
@@ -47,9 +49,56 @@ test('does not treat Set-Cookie as a redacted generic header', () => {
 });
 
 test('formats pending request list entries without waiting for a response', async () => {
-  const request = {
+  const request = createPendingRequest();
+
+  assert.equal(
+    await getShortDescriptionForRequestAsync(request, 7, false, true),
+    'reqid=7 [time unavailable, pending] [xhr] POST https://example.test/api?a=1 [pending: resume execution before reading response data]',
+  );
+});
+
+test('formats pending request status without waiting for a response', async () => {
+  const request = createPendingRequest();
+
+  assert.equal(
+    await getStatusFromRequestAsync(request),
+    '[pending: resume execution before reading response data]',
+  );
+});
+
+test('rejects pending response exports without waiting for a response', async () => {
+  const request = createPendingRequest();
+
+  await assert.rejects(
+    () => exportNetworkRequestPart(request, 'responseHeaders'),
+    /Request is pending/,
+  );
+  await assert.rejects(
+    () => exportNetworkRequestPart(request, 'responseBody'),
+    /Request is pending/,
+  );
+  await assert.rejects(
+    () => exportNetworkRequestPart(request, 'all'),
+    /Request is pending/,
+  );
+});
+
+test('allows pending request-side exports', async () => {
+  const request = createPendingRequest();
+
+  const requestBody = await exportNetworkRequestPart(request, 'requestBody');
+  assert.equal(Buffer.from(requestBody.data).toString('utf8'), 'hello=world');
+
+  const queryParams = await exportNetworkRequestPart(request, 'queryParams');
+  assert.match(Buffer.from(queryParams.data).toString('utf8'), /"a": "1"/);
+});
+
+function createPendingRequest(): HTTPRequest {
+  return {
     failure: () => null,
     method: () => 'POST',
+    postData: () => 'hello=world',
+    postDataBuffer: () => Buffer.from('hello=world'),
     resourceType: () => 'xhr',
     response: () => {
       throw new Error('response() should not be called for pending requests');
@@ -65,11 +114,6 @@ test('formats pending request list entries without waiting for a response', asyn
       responseStart: -1,
       responseEnd: -1,
     }),
-    url: () => 'https://example.test/api',
+    url: () => 'https://example.test/api?a=1',
   } as unknown as HTTPRequest;
-
-  assert.equal(
-    await getShortDescriptionForRequestAsync(request, 7, false, true),
-    'reqid=7 [time unavailable, pending] [xhr] POST https://example.test/api [pending]',
-  );
-});
+}

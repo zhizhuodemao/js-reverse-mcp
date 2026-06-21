@@ -251,7 +251,7 @@ so returned values have to JSON-serializable. Inline JSON results are bounded; u
 
 ### `remove_breakpoint`
 
-**Description:** Removes breakpoints. Pass breakpointId to remove a code breakpoint, url to remove an XHR breakpoint, or neither to remove ALL breakpoints (code + XHR). If a breakpoint is removed while execution is paused, execution is automatically resumed.
+**Description:** Removes breakpoints. Pass breakpointId to remove a code breakpoint, url to remove an XHR breakpoint, or neither to remove ALL breakpoints (code + XHR).
 
 **Parameters:**
 

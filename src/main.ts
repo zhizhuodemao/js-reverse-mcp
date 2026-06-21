@@ -94,6 +94,46 @@ Avoid sharing sensitive or personal information that you do not want to share wi
 };
 
 const toolMutex = new Mutex();
+const DEFAULT_TOOL_TIMEOUT_MS = 35_000;
+
+function getErrorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function errorResult(text: string): CallToolResult {
+  return {
+    content: [
+      {
+        type: 'text',
+        text,
+      },
+    ],
+    isError: true,
+  };
+}
+
+function withToolTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  toolName: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(
+        new Error(
+          `Tool "${toolName}" timed out after ${timeoutMs}ms. If execution is paused at a breakpoint, call pause_or_resume and retry.`,
+        ),
+      );
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  });
+}
 
 function registerTool(tool: ToolDefinition): void {
   server.registerTool(
@@ -104,52 +144,53 @@ function registerTool(tool: ToolDefinition): void {
       annotations: tool.annotations,
     },
     async (params): Promise<CallToolResult> => {
-      const guard = await toolMutex.acquire();
+      let guard: InstanceType<typeof Mutex.Guard>;
       try {
-        logger(`${tool.name} request: ${JSON.stringify(params, null, '  ')}`);
-        const context = await getContext();
-        logger(`${tool.name} context: resolved`);
-        // Navigation and browser-state tools must operate in CDP silence except
-        // for their own explicit protocol calls.
-        // Anti-bot systems detect ANY CDP activity during page load,
-        // including session creation from detectOpenDevToolsWindows().
-        if (
-          tool.annotations.category !== ToolCategory.NAVIGATION &&
-          tool.annotations.category !== ToolCategory.BROWSER_STATE
-        ) {
-          await context.ensureCollectorsInitialized();
-          await context.detectOpenDevToolsWindows();
-        }
-        const response = new McpResponse();
-        await tool.handler(
-          {
-            params,
-          },
-          response,
-          context,
-        );
-        try {
-          const content = await response.handle(tool.name, context);
-          return {
-            content,
-          };
-        } catch (error) {
-          const errorText =
-            error instanceof Error ? error.message : String(error);
+        guard = await toolMutex.acquire({timeoutMs: DEFAULT_TOOL_TIMEOUT_MS});
+      } catch (error) {
+        return errorResult(getErrorText(error));
+      }
 
-          return {
-            content: [
+      try {
+        return await withToolTimeout(
+          (async () => {
+            logger(
+              `${tool.name} request: ${JSON.stringify(params, null, '  ')}`,
+            );
+            const context = await getContext();
+            logger(`${tool.name} context: resolved`);
+
+            // Navigation and browser-state tools must operate in CDP silence
+            // except for their own explicit protocol calls.
+            // Anti-bot systems detect ANY CDP activity during page load,
+            // including session creation from detectOpenDevToolsWindows().
+            if (
+              tool.annotations.category !== ToolCategory.NAVIGATION &&
+              tool.annotations.category !== ToolCategory.BROWSER_STATE
+            ) {
+              await context.ensureCollectorsInitialized();
+              await context.detectOpenDevToolsWindows();
+            }
+            const response = new McpResponse();
+            await tool.handler(
               {
-                type: 'text',
-                text: errorText,
+                params,
               },
-            ],
-            isError: true,
-          };
-        }
+              response,
+              context,
+            );
+
+            return {
+              content: await response.handle(tool.name, context),
+            };
+          })(),
+          DEFAULT_TOOL_TIMEOUT_MS,
+          tool.name,
+        );
       } catch (err) {
-        logger(`${tool.name} error: ${err.message}`);
-        throw err;
+        const errorText = getErrorText(err);
+        logger(`${tool.name} error: ${errorText}`);
+        return errorResult(errorText);
       } finally {
         guard.dispose();
       }
@@ -168,7 +209,16 @@ const tools = [
   ...Object.values(siteDataTools),
 
   ...Object.values(websocketTools),
-] as ToolDefinition[];
+].filter((tool): tool is ToolDefinition => {
+  return (
+    typeof tool === 'object' &&
+    tool !== null &&
+    'name' in tool &&
+    'handler' in tool &&
+    'schema' in tool &&
+    'annotations' in tool
+  );
+});
 
 tools.sort((a, b) => {
   return a.name.localeCompare(b.name);

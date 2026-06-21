@@ -11,6 +11,7 @@ import type {HTTPRequest, HTTPResponse} from '../third_party/index.js';
 
 const BODY_CONTEXT_SIZE_LIMIT = 4096;
 const BODY_FETCH_TIMEOUT_MS = 5000;
+const RESPONSE_LOOKUP_TIMEOUT_MS = 1000;
 const FORM_FIELD_PREVIEW_LIMIT = 20;
 const HEADER_CONTEXT_SIZE_LIMIT = 4096;
 const LIST_SET_COOKIE_NAME_LIMIT = 5;
@@ -103,13 +104,47 @@ type ResponseBodyRead =
       error: string;
     };
 
-function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message = 'Timed out fetching body',
+): Promise<T> {
   return Promise.race([
     promise,
     new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Timed out fetching body')), ms),
+      setTimeout(() => reject(new Error(message)), ms),
     ),
   ]);
+}
+
+export function isRequestPending(request: HTTPRequest): boolean {
+  if (request.failure()) {
+    return false;
+  }
+
+  return !isAvailableTiming(request.timing().responseEnd);
+}
+
+export function getPendingRequestStatus(): string {
+  return '[pending: resume execution before reading response data]';
+}
+
+export function getPendingResponseError(part: NetworkExportPart): string {
+  return `Request is pending. Resume execution with pause_or_resume, then retry outputPart="${part}".`;
+}
+
+export async function getResponseIfCompleted(
+  request: HTTPRequest,
+): Promise<HTTPResponse | null> {
+  if (isRequestPending(request)) {
+    return null;
+  }
+
+  return withTimeout(
+    request.response(),
+    RESPONSE_LOOKUP_TIMEOUT_MS,
+    'Timed out waiting for response metadata',
+  );
 }
 
 export function getShortDescriptionForRequest(
@@ -127,7 +162,7 @@ export async function getShortDescriptionForRequestAsync(
   includeSetCookieMarker = false,
 ): Promise<string> {
   if (!hasFinishedOrFailed(request)) {
-    return getShortDescriptionForRequest(request, id, selectedInDevToolsUI);
+    return `reqid=${id} ${getFormattedRequestTimingBrief(request)} [${request.resourceType()}] ${request.method()} ${getUrlForList(request.url())} ${getPendingRequestStatus()}${selectedInDevToolsUI ? ` [selected in the DevTools Network panel]` : ''}`;
   }
 
   const status = await getStatusFromRequestAsync(request);
@@ -201,13 +236,17 @@ export function getStatusFromRequest(request: HTTPRequest): string {
   }
   // We can't synchronously get the response in Playwright.
   // Return pending for now - the detailed view will show the response.
-  return '[pending]';
+  return getPendingRequestStatus();
 }
 
 export async function getStatusFromRequestAsync(
   request: HTTPRequest,
 ): Promise<string> {
-  const httpResponse = await request.response();
+  if (isRequestPending(request)) {
+    return getPendingRequestStatus();
+  }
+
+  const httpResponse = await getResponseIfCompleted(request);
   const failure = request.failure();
   let status: string;
   if (httpResponse) {
@@ -227,7 +266,7 @@ export async function getStatusFromRequestAsync(
 export async function requestHasSetCookie(
   request: HTTPRequest,
 ): Promise<boolean> {
-  const httpResponse = await request.response();
+  const httpResponse = await getResponseIfCompleted(request);
   if (!httpResponse) {
     return false;
   }
@@ -329,9 +368,16 @@ export async function exportNetworkRequestPart(
   httpRequest: HTTPRequest,
   part: NetworkExportPart,
 ): Promise<{data: Uint8Array; summary: string}> {
+  if (
+    isRequestPending(httpRequest) &&
+    (part === 'responseHeaders' || part === 'responseBody' || part === 'all')
+  ) {
+    throw new Error(getPendingResponseError(part));
+  }
+
   switch (part) {
     case 'responseHeaders': {
-      const httpResponse = await httpRequest.response();
+      const httpResponse = await getResponseIfCompleted(httpRequest);
       if (!httpResponse) {
         throw new Error('No response is available for this request.');
       }
@@ -355,7 +401,7 @@ export async function exportNetworkRequestPart(
       };
     }
     case 'responseBody': {
-      const httpResponse = await httpRequest.response();
+      const httpResponse = await getResponseIfCompleted(httpRequest);
       if (!httpResponse) {
         throw new Error('No response is available for this request.');
       }
@@ -432,6 +478,13 @@ export async function getNetworkRequestExportHints(
     );
   }
 
+  if (isRequestPending(httpRequest)) {
+    hints.push(
+      'Request is pending. Resume execution with pause_or_resume before exporting responseHeaders, responseBody, or all.',
+    );
+    return [...new Set(hints)];
+  }
+
   const requestHeaders = await getRequestHeadersArray(httpRequest).catch(
     () => [],
   );
@@ -446,7 +499,7 @@ export async function getNetworkRequestExportHints(
     );
   }
 
-  const httpResponse = await httpRequest.response();
+  const httpResponse = await getResponseIfCompleted(httpRequest);
   if (httpResponse) {
     const headers = httpResponse.headers();
     const responseHeadersArray = await getResponseHeadersArray(httpResponse);
@@ -794,7 +847,7 @@ function headerLinesSize(headers: HeaderEntry[]): number {
 }
 
 async function getNetworkRequestSnapshot(httpRequest: HTTPRequest) {
-  const httpResponse = await httpRequest.response();
+  const httpResponse = await getResponseIfCompleted(httpRequest);
   const query = parseQueryPayload(httpRequest.url());
   const requestBody = bodySnapshotFromBuffer(getRequestBodyBuffer(httpRequest));
   const responseBody = httpResponse
@@ -964,7 +1017,7 @@ export function getSetCookieHeaders(
 }
 
 async function getSetCookieListMarker(request: HTTPRequest): Promise<string> {
-  const httpResponse = await request.response();
+  const httpResponse = await getResponseIfCompleted(request);
   if (!httpResponse) {
     return '';
   }
