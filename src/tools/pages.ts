@@ -11,6 +11,54 @@ import {defineTool, timeoutSchema} from './ToolDefinition.js';
 
 // Default navigation timeout in milliseconds (10 seconds)
 const DEFAULT_NAV_TIMEOUT = 10000;
+const PAUSE_POLL_INTERVAL_MS = 50;
+
+export type NavigationWaitResult =
+  | {status: 'completed'}
+  | {status: 'paused'}
+  | {status: 'error'; error: unknown};
+
+type PauseStateReader = {
+  isEnabled(): boolean;
+  isPaused(): boolean;
+};
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export async function waitForNavigationOrPause(
+  navigation: Promise<unknown>,
+  debugger_: PauseStateReader,
+): Promise<NavigationWaitResult> {
+  const navigationResult = navigation.then(
+    () => ({status: 'completed'}) as const,
+    error => ({status: 'error', error}) as const,
+  );
+
+  if (!debugger_.isEnabled()) {
+    return navigationResult;
+  }
+
+  let stopped = false;
+  const pauseResult = (async (): Promise<NavigationWaitResult> => {
+    while (!stopped) {
+      if (debugger_.isPaused()) {
+        return {status: 'paused'};
+      }
+      await delay(PAUSE_POLL_INTERVAL_MS);
+    }
+    return {status: 'completed'};
+  })();
+
+  const result = await Promise.race([navigationResult, pauseResult]);
+  stopped = true;
+  return result;
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export const selectPage = defineTool({
   name: 'select_page',
@@ -146,96 +194,108 @@ export const navigatePage = defineTool({
         if (!request.params.url) {
           throw new Error('A URL is required for navigation of type=url.');
         }
-        try {
-          await page.goto(request.params.url, {
-            ...options,
-            waitUntil: 'domcontentloaded',
-            referer: DEFAULT_REFERER,
-          });
-          response.appendResponseLine(
-            `Successfully navigated to ${request.params.url}.`,
+        {
+          const result = await waitForNavigationOrPause(
+            page.goto(request.params.url, {
+              ...options,
+              waitUntil: 'domcontentloaded',
+              referer: DEFAULT_REFERER,
+            }),
+            debugger_,
           );
-          response.appendResponseLine(
-            'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
-          );
-        } catch (error) {
-          if (debugger_.isPaused()) {
+          if (result.status === 'completed') {
+            response.appendResponseLine(
+              `Successfully navigated to ${request.params.url}.`,
+            );
+            response.appendResponseLine(
+              'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
+            );
+          } else if (result.status === 'paused' || debugger_.isPaused()) {
             response.appendResponseLine(
               `Navigation to ${request.params.url} started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
             );
           } else {
             response.appendResponseLine(
-              `Unable to navigate in the selected page: ${error.message}.`,
+              `Unable to navigate in the selected page: ${getErrorMessage(result.error)}.`,
             );
           }
         }
         break;
       case 'back':
-        try {
-          await page.goBack({
-            ...options,
-            waitUntil: 'domcontentloaded',
-          });
-          response.appendResponseLine(
-            `Successfully navigated back to ${page.url()}.`,
+        {
+          const result = await waitForNavigationOrPause(
+            page.goBack({
+              ...options,
+              waitUntil: 'domcontentloaded',
+            }),
+            debugger_,
           );
-          response.appendResponseLine(
-            'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
-          );
-        } catch (error) {
-          if (debugger_.isPaused()) {
+          if (result.status === 'completed') {
+            response.appendResponseLine(
+              `Successfully navigated back to ${page.url()}.`,
+            );
+            response.appendResponseLine(
+              'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
+            );
+          } else if (result.status === 'paused' || debugger_.isPaused()) {
             response.appendResponseLine(
               `Navigation back started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
             );
           } else {
             response.appendResponseLine(
-              `Unable to navigate back in the selected page: ${error.message}.`,
+              `Unable to navigate back in the selected page: ${getErrorMessage(result.error)}.`,
             );
           }
         }
         break;
       case 'forward':
-        try {
-          await page.goForward({
-            ...options,
-            waitUntil: 'domcontentloaded',
-          });
-          response.appendResponseLine(
-            `Successfully navigated forward to ${page.url()}.`,
+        {
+          const result = await waitForNavigationOrPause(
+            page.goForward({
+              ...options,
+              waitUntil: 'domcontentloaded',
+            }),
+            debugger_,
           );
-          response.appendResponseLine(
-            'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
-          );
-        } catch (error) {
-          if (debugger_.isPaused()) {
+          if (result.status === 'completed') {
+            response.appendResponseLine(
+              `Successfully navigated forward to ${page.url()}.`,
+            );
+            response.appendResponseLine(
+              'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
+            );
+          } else if (result.status === 'paused' || debugger_.isPaused()) {
             response.appendResponseLine(
               `Navigation forward started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
             );
           } else {
             response.appendResponseLine(
-              `Unable to navigate forward in the selected page: ${error.message}.`,
+              `Unable to navigate forward in the selected page: ${getErrorMessage(result.error)}.`,
             );
           }
         }
         break;
       case 'reload':
-        try {
-          await page.reload({
-            ...options,
-            waitUntil: 'domcontentloaded',
-          });
-          response.appendResponseLine(`Successfully reloaded the page.`);
-          response.appendResponseLine(
-            'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
+        {
+          const result = await waitForNavigationOrPause(
+            page.reload({
+              ...options,
+              waitUntil: 'domcontentloaded',
+            }),
+            debugger_,
           );
-        } catch (error) {
-          if (debugger_.isPaused()) {
+          if (result.status === 'completed') {
+            response.appendResponseLine(`Successfully reloaded the page.`);
+            response.appendResponseLine(
+              'Note: Any previously obtained script IDs are now invalid. Use script URLs instead.',
+            );
+          } else if (result.status === 'paused' || debugger_.isPaused()) {
             response.appendResponseLine(
               `Page reload started but execution is paused at a breakpoint. Use get_paused_info to inspect, then resume to continue loading.`,
             );
           } else {
             response.appendResponseLine(
-              `Unable to reload the selected page: ${error.message}.`,
+              `Unable to reload the selected page: ${getErrorMessage(result.error)}.`,
             );
           }
         }
