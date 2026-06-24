@@ -166,6 +166,30 @@ npm run build
 | `evaluate_script`       | 在页面或断点上下文执行 JavaScript，支持主世界、保存结果和读取一个本地输入文件 |
 | `list_console_messages` | 列出控制台消息，或按 msgid 获取单条详情                                       |
 
+## GUI 工作流脚本
+
+除了 MCP Server 模式（CLI），项目还提供独立的 GUI 自动化脚本，用于浏览器操作、API 发现和数据采集。**GUI 和 CLI 共享同一套 CDP 连接层，可以同时使用。**
+
+| 脚本 | 用途 |
+|------|------|
+| `scripts/gui/cdp-client.mjs` | CDP 连接层（公共模块，GUI/CLI 共享） |
+| `scripts/gui/discover-apis.mjs` | API 端点发现 |
+| `scripts/gui/intercept-response.mjs` | 网络响应拦截与篡改 |
+| `scripts/gui/bulk-collect.mjs` | 批量分页数据采集 |
+
+```bash
+# API 发现
+node scripts/gui/discover-apis.mjs --url https://example.com --port 9222
+
+# 响应拦截（绕过地域/身份检测）
+node scripts/gui/intercept-response.mjs --url https://example.com --pattern *api* --transform 'data.userProvince="湖北"'
+
+# 批量采集
+node scripts/gui/bulk-collect.mjs --url "https://api.example.com/list?page=" --port 9222 --pages 10 --output data.json
+```
+
+详见 [scripts/gui/TODO.md](scripts/gui/TODO.md)。
+
 ## 使用示例
 
 ### JS 逆向基本流程
