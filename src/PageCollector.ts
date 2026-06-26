@@ -658,8 +658,17 @@ function captureResponseBody(req: HTTPRequest): void {
   })();
 }
 
+function initiatorKey(url: string, method: string): string {
+  return `${method} ${url}`;
+}
+
 export class NetworkCollector extends PageCollector<HTTPRequest> {
+  // Initiators keyed by CDP requestId. Requires cdpRequestIdSymbol to have been
+  // mapped onto the request, which races against event delivery.
   #initiators = new WeakMap<Page, Map<string, RequestInitiator>>();
+  // Initiators keyed by "METHOD url". Order-independent fallback used when the
+  // requestId mapping lost the race, so the initiator is still recoverable.
+  #initiatorsByKey = new WeakMap<Page, Map<string, RequestInitiator>>();
   #cdpListeners = new WeakMap<Page, () => void>();
   #sessionProvider: CdpSessionProvider;
   #cdpReady = false;
@@ -726,6 +735,8 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
 
     const initiatorMap = new Map<string, RequestInitiator>();
     this.#initiators.set(page, initiatorMap);
+    const initiatorByKey = new Map<string, RequestInitiator>();
+    this.#initiatorsByKey.set(page, initiatorByKey);
 
     try {
       const client = await this.#sessionProvider.getSession(page);
@@ -740,6 +751,12 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
             event.requestId,
             event.initiator as RequestInitiator,
           );
+          // Also key by URL+method so getInitiator can recover the initiator
+          // even when the requestId mapping below loses the delivery race.
+          initiatorByKey.set(
+            initiatorKey(event.request.url, event.request.method),
+            event.initiator as RequestInitiator,
+          );
           // Bound memory: drop oldest entries beyond the cap (Map preserves
           // insertion order, so the first key is the oldest).
           while (initiatorMap.size > MAX_INITIATOR_ENTRIES) {
@@ -748,6 +765,13 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
               break;
             }
             initiatorMap.delete(oldest);
+          }
+          while (initiatorByKey.size > MAX_INITIATOR_ENTRIES) {
+            const oldest = initiatorByKey.keys().next().value;
+            if (oldest === undefined) {
+              break;
+            }
+            initiatorByKey.delete(oldest);
           }
         }
 
@@ -803,6 +827,7 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
     }
     this.#cdpListeners.delete(page);
     this.#initiators.delete(page);
+    this.#initiatorsByKey.delete(page);
     responseBodyBudget.delete(page);
   }
 
@@ -820,15 +845,27 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
    * @returns The initiator info or undefined if not found
    */
   getInitiator(page: Page, request: HTTPRequest): RequestInitiator | undefined {
-    const initiatorMap = this.#initiators.get(page);
-    if (!initiatorMap) {
-      return undefined;
-    }
+    // Preferred: exact CDP requestId match (when the mapping won the race).
     const requestId = this.getCdpRequestId(request);
-    if (!requestId) {
+    const byId = requestId
+      ? this.#initiators.get(page)?.get(requestId)
+      : undefined;
+    if (byId) {
+      return byId;
+    }
+
+    // Fallback: URL+method correlation. The requestId mapping requires the
+    // Playwright request to already be in storage when the CDP event fires,
+    // which races against event delivery; this lookup is order-independent.
+    let url: string;
+    let method: string;
+    try {
+      url = request.url();
+      method = request.method();
+    } catch {
       return undefined;
     }
-    return initiatorMap.get(requestId);
+    return this.#initiatorsByKey.get(page)?.get(initiatorKey(url, method));
   }
 
   /**

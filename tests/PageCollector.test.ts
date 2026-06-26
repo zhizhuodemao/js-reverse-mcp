@@ -54,6 +54,30 @@ function createCollector(): NetworkCollector {
   );
 }
 
+function createFakeCdpSession() {
+  const handlers = new Map<string, Array<(payload: unknown) => void>>();
+  const session = {
+    on(event: string, cb: (payload: unknown) => void) {
+      const arr = handlers.get(event) ?? [];
+      arr.push(cb);
+      handlers.set(event, arr);
+      return session;
+    },
+    off() {
+      return session;
+    },
+    send: async () => undefined,
+    emit(event: string, payload: unknown) {
+      for (const cb of handlers.get(event) ?? []) {
+        cb(payload);
+      }
+    },
+  };
+  return session;
+}
+
+const flushMicrotasks = () => new Promise(resolve => setTimeout(resolve, 0));
+
 test('preserved requests survive more than the old navigation window', () => {
   const collector = createCollector();
   const {page, mainFrame} = createFakePage();
@@ -129,4 +153,49 @@ test('evicts the oldest requests once past the retention cap', () => {
     all.includes(lastRoundReq as HTTPRequest),
     'the newest navigations should be retained',
   );
+});
+
+test('getInitiator recovers via URL+method when the requestId mapping lost the race', async () => {
+  const {page} = createFakePage();
+  const cdp = createFakeCdpSession();
+  const collector = new NetworkCollector(
+    {pages: () => [page]} as unknown as BrowserContext,
+    {getSession: async () => cdp} as unknown as CdpSessionProvider,
+  );
+  collector.addPage(page);
+  await collector.initCdp();
+  await flushMicrotasks(); // let the fire-and-forget CDP setup finish
+
+  // The CDP requestWillBeSent event arrives before the Playwright request is in
+  // storage, so the requestId mapping never tags the request object.
+  cdp.emit('Network.requestWillBeSent', {
+    requestId: 'req-1',
+    request: {url: 'https://x/api', method: 'POST'},
+    initiator: {
+      type: 'script',
+      stack: {
+        callFrames: [
+          {
+            functionName: 'doFetch',
+            scriptId: '1',
+            url: 'https://x/page1.html',
+            lineNumber: 1,
+            columnNumber: 1,
+          },
+        ],
+      },
+    },
+  });
+
+  // createFakeRequest uses method POST; cdpRequestIdSymbol was never set, so the
+  // requestId path yields nothing and the URL+method fallback must recover it.
+  const request = createFakeRequest('https://x/api', {id: 'sub'});
+  const initiator = collector.getInitiator(page, request);
+
+  assert.ok(
+    initiator,
+    'initiator should be recovered via the URL+method fallback',
+  );
+  assert.equal(initiator?.type, 'script');
+  assert.equal(initiator?.stack?.callFrames[0].functionName, 'doFetch');
 });
