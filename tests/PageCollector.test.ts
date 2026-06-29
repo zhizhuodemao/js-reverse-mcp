@@ -17,7 +17,7 @@ import type {
 
 // Mirror of MAX_RETAINED_REQUESTS in PageCollector.ts (the FIFO cap is module
 // private). Keep in sync if the source constant changes.
-const FIFO_CAP = 1000;
+const FIFO_CAP = 5000;
 
 function createFakePage(): {page: Page; mainFrame: object} {
   const listeners = new Map<string, Array<(arg: unknown) => void>>();

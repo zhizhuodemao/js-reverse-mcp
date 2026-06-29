@@ -171,18 +171,18 @@ export const MAX_CACHED_TOTAL_BYTES = 50 * 1024 * 1024;
  * also reclaims its cached body bytes from the per-page budget so that budget is
  * a rolling window rather than a one-way ratchet. The analyst establishes a
  * clean baseline on demand via clear_network_requests, not via navigation — so
- * a small recent working set is all that needs to stay inspectable.
+ * this is a memory backstop, not the workflow.
  */
-const MAX_RETAINED_REQUESTS = 1000;
+const MAX_RETAINED_REQUESTS = 5000;
 
 const BODY_CAPTURE_TIMEOUT_MS = 5000;
 
 /**
- * Upper bound on retained per-page initiator entries. Kept >= the request queue
- * cap so every in-queue request keeps its initiator: initiators are recorded on
- * a different CDP event than the request record, so a tighter cap could evict an
- * initiator while its request is still queued. Bounded by a FIFO cap (oldest
- * dropped first) and wiped wholesale by clear_network_requests.
+ * Upper bound on retained per-page initiator entries, sized to match the request
+ * queue cap so an in-queue request still finds its initiator: initiators are
+ * recorded on a different CDP event than the request record, so the two FIFOs
+ * trim in lockstep rather than one stranding the other. Bounded by a FIFO cap
+ * (oldest dropped first) and wiped wholesale by clear_network_requests.
  */
 const MAX_INITIATOR_ENTRIES = 5000;
 
