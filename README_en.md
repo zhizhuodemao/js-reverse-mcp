@@ -6,6 +6,16 @@ An AI-first / AI-native JavaScript reverse engineering MCP server that lets codi
 
 It does not simply expose raw Chrome DevTools APIs to the model. It reorganizes scripts, breakpoints, network traffic, WebSocket data, browser state, and local file I/O into tools shaped for continuous AI Agent reasoning and action. Anti-detection is one supporting capability: default [Patchright](https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs) protocol-layer stealth, plus optional [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) source-level fingerprint mode for strong anti-bot sites.
 
+## Tired of Reconfiguring Agents? Try Bloome
+
+<p align="center">
+  <a href="https://bloome.im/login?ref=zhizhuodemao">
+    <img src="images/广告图片.png" alt="Bloome: Accelerating the world's transition to human-agent teams" width="100%">
+  </a>
+</p>
+
+[Bloome](https://bloome.im/login?ref=zhizhuodemao) lets Claude, ChatGPT, DeepSeek, and other AI agents collaborate in the same cloud conversation. For JavaScript reverse-engineering and debugging, you can work from web or mobile with zero setup, then share configured agents with your team.
+
 ## Features
 
 - **AI-native tool design**: tool granularity, output boundaries, and error guidance are designed around Agent decisions
