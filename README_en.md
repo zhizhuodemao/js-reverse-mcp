@@ -20,6 +20,8 @@ Drop a task into the conversation and they automatically divide the work, drafti
 
 In short: upgrade from "me + one assistant" to "my team + a group of collaborative agents".
 
+👉 Try Bloome: https://bloome.im/login?ref=zhizhuodemao
+
 ## Features
 
 - **AI-native tool design**: tool granularity, output boundaries, and error guidance are designed around Agent decisions
