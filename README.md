@@ -65,6 +65,14 @@ claude mcp add js-reverse npx js-reverse-mcp
 codex mcp add js-reverse -- npx js-reverse-mcp
 ```
 
+### Autohand Code
+
+```bash
+autohand mcp add js-reverse npx js-reverse-mcp
+```
+
+添加 `--scope project`（放在 `js-reverse` 之前）可将服务器保存到当前项目的 `.autohand` 配置。安装详情请参阅 [Autohand Code CLI](https://github.com/autohandai/code-cli/)。
+
 ### Cursor
 
 进入 `Cursor Settings` -> `MCP` -> `New MCP Server`，使用上面的配置。
