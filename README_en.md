@@ -9,7 +9,7 @@ It does not simply expose raw Chrome DevTools APIs to the model. It reorganizes 
 ## ☁️ Sponsored by Bloome
 
 <p align="center">
-  <a href="https://bloome.im/login?ref=zhizhuodemao">
+  <a href="https://bloome.im/app?ref=zhizhuodemao&amp;utm_medium=github&amp;utm_source=zhizhuodemao-js-reverse-mcp-ivor-202607">
     <img src="images/广告图片.png" alt="Bloome: Accelerating the world's transition to human-agent teams" width="100%">
   </a>
 </p>
@@ -20,7 +20,7 @@ Drop a task into the conversation and they automatically divide the work, drafti
 
 In short: upgrade from "me + one assistant" to "my team + a group of collaborative agents".
 
-👉 Try Bloome: https://bloome.im/login?ref=zhizhuodemao
+👉 Try [Bloome](https://bloome.im/app?ref=zhizhuodemao&utm_medium=github&utm_source=zhizhuodemao-js-reverse-mcp-ivor-202607)
 
 ## Features
 
