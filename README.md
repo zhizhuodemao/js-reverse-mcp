@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/zhizhuodemao-js-reverse-mcp-badge.png)](https://mseep.ai/app/zhizhuodemao-js-reverse-mcp)
+
 # JS Reverse MCP
 
 [English](README_en.md) | 中文
