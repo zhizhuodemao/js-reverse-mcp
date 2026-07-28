@@ -1,5 +1,7 @@
 # JS Reverse MCP
 
+[![MCP Toplist](https://mcptoplist.com/badge/glama%2Fzhizhuodemao%2Fjs-reverse-mcp.svg)](https://mcptoplist.com/server/glama%2Fzhizhuodemao%2Fjs-reverse-mcp)
+
 [English](README_en.md) | 中文
 
 AI-first / AI-native 的 JavaScript 逆向工程 MCP Server，让你的 AI 编码助手（如 Claude、Cursor、Copilot）能够像分析师一样持续调试、定位、保存和复盘网页中的 JavaScript 行为。
