@@ -1,6 +1,6 @@
 # CloakBrowser Mode (`--cloak`)
 
-`--cloak` is an **optional** launch flag for js-reverse-mcp, used when debugging sites with strong anti-bot protection. It swaps system Chrome for the [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) team's custom Chromium binary with platform-specific source-level fingerprint patches, stacked on top of the default Patchright protocol-layer stealth — forming a **two-layer anti-detection setup**.
+`--cloak` is an **optional** launch flag for js-reverse-mcp, used when debugging sites with strong anti-bot protection. It swaps the system Chrome for the [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) team's custom Chromium binary (49 C++ source-level fingerprint patches), stacked on top of the default Patchright protocol-layer stealth — forming a **two-layer anti-detection setup**.
 
 ## When to use `--cloak`
 
@@ -29,9 +29,27 @@ Add `--cloak` to your MCP config:
 }
 ```
 
+If you already have CloakBrowser locally, also pass `--cloakBinaryPath`. The MCP will use that executable directly and skip the first-run auto-download:
+
+```json
+{
+  "mcpServers": {
+    "js-reverse": {
+      "command": "npx",
+      "args": [
+        "js-reverse-mcp",
+        "--cloak",
+        "--cloakBinaryPath",
+        "D:\\develop_software\\CloakBrowser\\chrome.exe"
+      ]
+    }
+  }
+}
+```
+
 ### **Strongly recommended: pre-download the binary first**
 
-The first `--cloak` launch silently downloads the ~200MB CloakBrowser binary to `~/.cloakbrowser/` (cached there forever after, zero latency on subsequent launches). But inside an MCP server, **the user sees no progress** for those 30–60 seconds — it looks like the MCP is hanging.
+Without `--cloakBinaryPath`, the first `--cloak` launch silently downloads the ~200MB CloakBrowser binary to `~/.cloakbrowser/` (cached there forever after, zero latency on subsequent launches). But inside an MCP server, **the user sees no progress** for those 30–60 seconds — it looks like the MCP is hanging.
 
 **Best practice: take this step out of the MCP context and run it manually once**:
 
@@ -53,7 +71,7 @@ The `cloakbrowser` package is already in the npm cache via `js-reverse-mcp`'s `o
 │  • Evaluates in isolated execution contexts by default │
 │  • Strips --enable-automation and similar launch flags │
 ├────────────────────────────────────────────────────────┤
-│ Source layer: CloakBrowser binary (platform C++ patches)│
+│ Source layer: CloakBrowser binary (49 C++ patches)     │
 │  • navigator.webdriver = false (property exists, matches real Chrome) │
 │  • canvas / WebGL / audio / fonts spoofed at source    │
 │  • GPU strings, screen dims derived from fingerprint seed │
@@ -63,11 +81,69 @@ The `cloakbrowser` package is already in the npm cache via `js-reverse-mcp`'s `o
 
 Neither layer injects JavaScript. Any `Object.defineProperty`-style anti-detection hack would itself become a fingerprint signal — we avoid that entirely.
 
-## Platform profile
+## Platform spoof: Windows on every host (but ≠ full Linux/Win protection)
 
-js-reverse-mcp inherits CloakBrowser's current platform defaults: macOS uses its native macOS profile, while Linux and Windows use the upstream-selected Windows desktop profile. This keeps the platform, GPU, UA, and binary coherent. The MCP only replaces the random fingerprint seed so one persistent profile keeps a stable identity across launches, and removes `--no-sandbox`, which is inappropriate for this desktop debugging server.
+**`--cloak` mode ignores the real OS and uniformly passes `--fingerprint-platform=windows` to surface as a Windows desktop**. But this **does NOT mean** you get full Linux/Win-build protection when running on macOS:
 
-CloakBrowser binary versions and patch coverage vary by platform and release, so this guide intentionally does not pin a patch count. If a target site still blocks one platform, judge by that site's actual behavior and compare against the default system-Chrome mode instead of forcing a different OS profile by hand.
+| Platform build    | C++ patches |
+| ----------------- | ----------- |
+| Linux x64 / arm64 | **57**      |
+| Windows x64       | **57**      |
+| macOS arm64 / x64 | **26**      |
+
+CloakBrowser's macOS build is **compiled with only 26 of the 57 patches**. When you run `--cloak` on a Mac, **regardless of `--fingerprint-platform`**, the underlying engine is still the macOS build with 26 patches. The `--fingerprint-platform=windows` flag only changes how the **derived fingerprint strings** look on the surface (UA, `navigator.platform`, GPU names) — **it does not magically add the 31 patches the macOS build was never shipped with**.
+
+**Limitations of "cloak on macOS faking Windows"**:
+
+- ✅ `navigator.userAgent`, `navigator.platform`, `screen.width/height` all surface Windows-desktop values
+- ✅ WebGL vendor/renderer are derived into Windows GPU strings (e.g. `Google Inc. (NVIDIA)` + `RTX 3090`)
+- ❌ **Fine-grained consistency of WebGL strings** (device ID format, version suffix, etc.) doesn't strictly match what real Windows + RTX 3090 outputs — active detectors (like BrowserScan) can spot the difference
+- ❌ Internal consistency between canvas / audio / fonts and the GPU context — also part of the 31 patches not covered
+
+### BrowserScan empirical comparison
+
+| Setup                                                       | BrowserScan red flag on WebGL vendor/renderer?         |
+| ----------------------------------------------------------- | ------------------------------------------------------ |
+| Real macOS Chrome (the user's everyday browser)             | ❌ Not flagged                                         |
+| basic mode (system Chrome + Patchright)                     | ❌ Not flagged                                         |
+| **cloak macOS build with `--fingerprint-platform=windows`** | 🔴 **Flagged** (labeled "anti-fingerprint technology") |
+
+So cloak on macOS, even with the Windows fingerprint switch, cannot fool BrowserScan's active WebGL check.
+
+### How to actually get the full 57 patches
+
+Run the **Linux or Windows build** of cloak:
+
+```bash
+# Docker, Linux build, CDP exposed on host
+docker run -d --name cloak \
+  -p 127.0.0.1:9222:9222 \
+  cloakhq/cloakbrowser \
+  cloakserve --headless=false
+```
+
+Then have the MCP connect via `--browserUrl http://127.0.0.1:9222` (one of the reasons we keep the `--browserUrl` flag).
+
+**Costs of Docker on macOS**:
+
+- Docker for Mac has no X server by default → the Linux browser runs but you can't see it
+- noVNC workaround: a browser inside a browser, awkward to debug
+- If you genuinely need a visible window AND strong anti-bot → a Linux/Windows host is easier
+
+### Important: BrowserScan ≠ real production anti-bot
+
+BrowserScan is an **active fingerprint detector** demo site, stricter than most production anti-bot. Cloudflare Turnstile / FingerprintJS / DataDome use **aggregate behavioral scoring**, looking at different signals.
+
+**The real judgment criterion is "can I load the site I'm actually trying to debug"**:
+
+- Loads fine → cloak macOS (26 patches) is sufficient, BrowserScan red flags don't matter
+- Blocked → escalate to Docker Linux cloak
+
+**Do not treat "BrowserScan all green" as a product goal**. It's a stress test, not reality.
+
+### Switching back to native macOS profile
+
+For rare cases (e.g. debugging content specifically targeting macOS Safari), edit the `const platform = 'windows'` line at `src/cloak.ts:99`.
 
 ## Differences vs default mode
 
@@ -77,8 +153,8 @@ CloakBrowser binary versions and patch coverage vary by platform and release, so
 | Chrome Web Store                  | ✅                                            | ❌ (Chromium has no Google closed-source services)         |
 | Google sync / account integration | ✅                                            | ❌                                                         |
 | Your installed extensions         | ✅ visible                                    | ❌ not visible                                             |
-| Widevine DRM                      | ✅                                            | Requires a separately sideloaded Widevine CDM              |
-| Fingerprint protection            | Protocol layer (Patchright)                   | Protocol + platform-specific source patches                |
+| Widevine DRM                      | ✅                                            | ❌ (encrypted video sites may not play)                    |
+| Fingerprint protection            | Protocol layer (Patchright)                   | Protocol + source layer (49 C++ patches)                   |
 | Startup speed                     | Fast                                          | First run: ~30-60s for download, then normal               |
 | Anti-bot bypass rate              | Medium                                        | High (passes 30+ detection sites per CloakBrowser's tests) |
 | Persistent profile path           | `~/.cache/chrome-devtools-mcp/chrome-profile` | `~/.cache/chrome-devtools-mcp/cloak-profile`               |

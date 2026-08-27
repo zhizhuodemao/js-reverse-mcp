@@ -9,59 +9,23 @@ import type {TrafficSummary} from '../formatters/websocketFormatter.js';
 import type {RequestInitiator} from '../PageCollector.js';
 import {zod} from '../third_party/index.js';
 import type {Dialog, Frame, HTTPRequest, Page} from '../third_party/index.js';
-import {TOOL_ERROR_CODES} from '../ToolError.js';
+import type {TraceResult} from '../trace-processing/parse.js';
 import type {PaginationOptions} from '../utils/types.js';
 import type {WebSocketData} from '../WebSocketCollector.js';
 
 import type {ToolCategory} from './categories.js';
-
-export const TOOL_CAPABILITIES = [
-  'debugger',
-  'network',
-  'websocket',
-  'devtools-ui',
-] as const;
-
-export type ToolCapability = (typeof TOOL_CAPABILITIES)[number];
-
-export const TOOL_OUTPUT_SCHEMA = {
-  ok: zod.boolean().describe('Whether the tool completed successfully.'),
-  tool: zod.string().describe('Stable MCP tool name.'),
-  summary: zod.string().describe('Concise human-readable outcome.'),
-  data: zod
-    .record(zod.string(), zod.unknown())
-    .optional()
-    .describe('Machine-readable result payload.'),
-  error: zod
-    .object({
-      code: zod.enum(TOOL_ERROR_CODES).describe('Stable error code.'),
-      message: zod.string(),
-      retryable: zod.boolean(),
-    })
-    .optional(),
-};
-
-export const PAGINATION_OUTPUT_SCHEMA = zod.object({
-  pageIdx: zod.number().int(),
-  pageSize: zod.number().int(),
-  totalItems: zod.number().int(),
-  totalPages: zod.number().int(),
-  hasNextPage: zod.boolean(),
-  hasPreviousPage: zod.boolean().optional(),
-});
-
-export function createToolOutputSchema(dataSchema: zod.ZodRawShape) {
-  return {
-    ...TOOL_OUTPUT_SCHEMA,
-    data: zod.object(dataSchema).optional(),
-  };
-}
 
 export interface ToolDefinition<
   Schema extends zod.ZodRawShape = zod.ZodRawShape,
 > {
   name: string;
   description: string;
+  /**
+   * Browser-control tools can run before a browser context exists. Without
+   * this opt-out, launch_browser would first start the current default browser
+   * just to switch away from it.
+   */
+  requiresBrowserContext?: boolean;
   annotations: {
     title?: string;
     category: ToolCategory;
@@ -69,16 +33,7 @@ export interface ToolDefinition<
      * If true, the tool does not modify its environment.
      */
     readOnlyHint: boolean;
-    destructiveHint?: boolean;
-    idempotentHint?: boolean;
-    openWorldHint?: boolean;
   };
-  /** Override the default end-to-end execution timeout for this tool. */
-  timeoutMs?: number;
-  /** CDP collectors/domains that must be active before this tool runs. */
-  capabilities?: readonly ToolCapability[];
-  /** Typed structured-content envelope for this tool. */
-  outputSchema?: zod.ZodRawShape;
   schema: Schema;
   handler: (
     request: Request<Schema>,
@@ -88,8 +43,7 @@ export interface ToolDefinition<
 }
 
 export interface Request<Schema extends zod.ZodRawShape> {
-  params: zod.output<zod.ZodObject<Schema>>;
-  signal?: AbortSignal;
+  params: zod.objectOutputType<Schema, zod.ZodTypeAny>;
 }
 
 export interface ImageContentData {
@@ -104,8 +58,8 @@ export interface DevToolsData {
 
 export interface Response {
   appendResponseLine(value: string): void;
-  setStructuredContent(value: Record<string, unknown>): void;
-  setIncludePages(value: boolean, options?: PaginationOptions): void;
+  setContextDetached(value: boolean): void;
+  setIncludePages(value: boolean): void;
   setIncludeNetworkRequests(
     value: boolean,
     options?: PaginationOptions & {
@@ -141,6 +95,10 @@ export interface Response {
  * Only add methods required by tools/*.
  */
 export type Context = Readonly<{
+  isRunningPerformanceTrace(): boolean;
+  setIsRunningPerformanceTrace(x: boolean): void;
+  recordedTraces(): TraceResult[];
+  storeTraceRecording(result: TraceResult): void;
   getSelectedPage(): Page;
   getDialog(): Dialog | undefined;
   clearDialog(): void;
@@ -149,9 +107,9 @@ export type Context = Readonly<{
   isPageSelected(page: Page): boolean;
   newPage(): Promise<Page>;
   closePage(pageIdx: number): Promise<void>;
-  selectPage(page: Page): Promise<void>;
-  stopPageLoading(page: Page): Promise<void>;
-  reinitDebugger(): Promise<void>;
+  selectPage(page: Page): void;
+  setNetworkConditions(conditions: string | null): void;
+  setCpuThrottlingRate(rate: number): void;
   saveTemporaryFile(
     data: Uint8Array<ArrayBufferLike>,
     mimeType: 'image/png' | 'image/jpeg' | 'image/webp',
@@ -159,7 +117,6 @@ export type Context = Readonly<{
   saveFile(
     data: Uint8Array<ArrayBufferLike>,
     filename: string,
-    options?: {confirmOverwrite?: boolean},
   ): Promise<{filename: string}>;
   waitForEventsAfterAction(action: () => Promise<unknown>): Promise<void>;
   waitForTextOnPage(params: {
@@ -208,18 +165,11 @@ export type Context = Readonly<{
   /**
    * Cache traffic summary for a WebSocket connection.
    */
-  cacheTrafficSummary(
-    wsid: number,
-    version: number,
-    summary: TrafficSummary,
-  ): void;
+  cacheTrafficSummary(wsid: number, summary: TrafficSummary): void;
   /**
    * Get cached traffic summary for a WebSocket connection.
    */
-  getCachedTrafficSummary(
-    wsid: number,
-    version: number,
-  ): TrafficSummary | undefined;
+  getCachedTrafficSummary(wsid: number): TrafficSummary | undefined;
   /**
    * Get the currently selected frame (or main frame if none selected).
    */
@@ -228,30 +178,18 @@ export type Context = Readonly<{
    * Select a specific frame for code execution.
    * Also reinitializes the debugger for the frame's CDP session.
    */
-  selectFrame(frame: Frame): Promise<void>;
+  selectFrame(frame: Frame): void;
   /**
    * Reset frame selection back to the main frame.
    * Also reinitializes the debugger for the main page's CDP session.
    */
-  resetSelectedFrame(): Promise<void>;
-  ensureCapabilities(capabilities: readonly ToolCapability[]): Promise<void>;
+  resetSelectedFrame(): void;
 }>;
 
 export function defineTool<Schema extends zod.ZodRawShape>(
   definition: ToolDefinition<Schema>,
 ) {
-  return {
-    ...definition,
-    annotations: {
-      // MCP defaults destructiveHint to true when omitted. Make the ordinary
-      // debugging/navigation tools explicitly non-destructive; tools that can
-      // delete data or perform arbitrary page actions opt back into true and
-      // require their own confirmation parameter.
-      destructiveHint: false,
-      ...definition.annotations,
-    },
-    outputSchema: definition.outputSchema ?? TOOL_OUTPUT_SCHEMA,
-  };
+  return definition;
 }
 
 export const CLOSE_PAGE_ERROR =
@@ -266,21 +204,6 @@ export const timeoutSchema = {
       `Maximum wait time in milliseconds. If set to 0, the default timeout will be used.`,
     )
     .transform(value => {
-      return value !== undefined && value <= 0 ? undefined : value;
+      return value && value <= 0 ? undefined : value;
     }),
-};
-
-export const paginationSchema = {
-  pageSize: zod
-    .number()
-    .int()
-    .positive()
-    .optional()
-    .describe('Maximum items per page. Defaults to 20.'),
-  pageIdx: zod
-    .number()
-    .int()
-    .min(0)
-    .optional()
-    .describe('Page number (0-based). Defaults to 0.'),
 };

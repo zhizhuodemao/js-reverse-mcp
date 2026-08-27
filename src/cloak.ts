@@ -7,21 +7,20 @@
 import {randomInt} from 'node:crypto';
 import {
   closeSync,
-  constants as fsConstants,
-  fchmodSync,
-  fstatSync,
-  ftruncateSync,
+  existsSync,
   mkdirSync,
   openSync,
   readFileSync,
-  writeSync,
+  writeFileSync,
 } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
+
+const SEED_WAIT_BUFFER = new Int32Array(new SharedArrayBuffer(4));
 
 interface CloakBrowserModule {
   ensureBinary(): Promise<string>;
   binaryInfo(): {installed: boolean};
-  getDefaultStealthArgs(): string[];
 }
 
 async function loadCloakBrowser(): Promise<CloakBrowserModule> {
@@ -60,52 +59,68 @@ async function withStdoutRedirectedToStderr<T>(
   }
 }
 
-export function getOrCreateSeed(profileDir: string): number {
-  mkdirSync(profileDir, {recursive: true, mode: 0o700});
+function getOrCreateSeed(profileDir: string): number {
   const seedFile = path.join(profileDir, '.cloak-seed');
-  let fd: number | undefined;
+  // Read existing seed (fast path — no lock needed for reads)
+  const existingSeed = readSeedFile(seedFile);
+  if (existingSeed !== undefined) return existingSeed;
+  if (!existsSync(profileDir)) mkdirSync(profileDir, {recursive: true});
+  const seed = randomInt(10000, 100000);
+  // Use exclusive-create (O_EXCL) to win a potential startup race.
+  // If another process created the file between our existsSync and here,
+  // openSync throws — we fall back to reading the winner's seed instead.
   try {
-    fd = openSync(
-      seedFile,
-      fsConstants.O_RDWR |
-        fsConstants.O_CREAT |
-        fsConstants.O_NOFOLLOW |
-        fsConstants.O_NONBLOCK,
-      0o600,
-    );
-    if (!fstatSync(fd).isFile()) {
-      throw new Error(
-        `Cloak fingerprint seed is not a regular file: ${seedFile}`,
-      );
-    }
-    fchmodSync(fd, 0o600);
-    const parsed = Number.parseInt(readFileSync(fd, 'utf8').trim(), 10);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
-    const seed = randomInt(10000, 100000);
-    ftruncateSync(fd, 0);
-    writeSync(fd, String(seed), 0, 'utf8');
+    const fd = openSync(seedFile, 'wx');
+    writeFileSync(fd, String(seed), 'utf8');
+    closeSync(fd);
     return seed;
-  } finally {
-    if (fd !== undefined) {
-      closeSync(fd);
-    }
+  } catch {
+    // Another instance created the file first. It may not have finished writing
+    // yet, so wait briefly for a valid seed instead of using a divergent local
+    // random seed for the same persistent profile.
+    const winnerSeed = waitForSeedFile(seedFile);
+    if (winnerSeed !== undefined) return winnerSeed;
+    throw new Error(
+      `Failed to read CloakBrowser fingerprint seed: ${seedFile}`,
+    );
   }
+}
+
+function readSeedFile(seedFile: string): number | undefined {
+  if (!existsSync(seedFile)) return undefined;
+  const parsed = Number.parseInt(readFileSync(seedFile, 'utf8').trim(), 10);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function waitForSeedFile(seedFile: string): number | undefined {
+  const deadline = Date.now() + 500;
+  while (Date.now() < deadline) {
+    const parsed = readSeedFile(seedFile);
+    if (parsed !== undefined) return parsed;
+    // Atomics.wait() is allowed on the Node.js main thread (unlike browsers).
+    // It blocks synchronously for 10 ms — intentional here since this entire
+    // function is synchronous and we need to spin-wait for a concurrent write
+    // to complete. Only reachable on the extremely rare path where two MCP
+    // processes start simultaneously with the same profile directory.
+    Atomics.wait(SEED_WAIT_BUFFER, 0, 0, 10);
+  }
+  return readSeedFile(seedFile);
+}
+
+function resolveExplicitBinaryPath(binaryPath: string): string {
+  const expanded = binaryPath.startsWith('~')
+    ? path.join(os.homedir(), binaryPath.slice(1))
+    : binaryPath;
+  const resolved = path.resolve(expanded);
+  if (!existsSync(resolved)) {
+    throw new Error(`CloakBrowser binary does not exist: ${resolved}`);
+  }
+  return resolved;
 }
 
 export interface CloakSetup {
   executablePath: string;
   args: string[];
-}
-
-export function buildCloakArgs(defaultArgs: readonly string[], seed: number) {
-  return [
-    ...defaultArgs.filter(
-      arg => arg !== '--no-sandbox' && !arg.startsWith('--fingerprint='),
-    ),
-    `--fingerprint=${seed}`,
-  ];
 }
 
 /**
@@ -115,16 +130,69 @@ export function buildCloakArgs(defaultArgs: readonly string[], seed: number) {
  * same profile always presents the same virtual identity (a stable "returning
  * visitor"). When undefined (isolated mode), a random seed is generated for
  * this launch only.
+ *
+ * When fingerprintSeed is provided, it overrides both the persisted and random
+ * seed — useful for reproducing a specific virtual identity across launches.
  */
 export async function setupCloak(
   profileDir: string | undefined,
+  binaryPath: string | undefined,
+  fingerprintSeed?: number,
 ): Promise<CloakSetup> {
+  const executablePath = binaryPath
+    ? resolveExplicitBinaryPath(binaryPath)
+    : await resolveDownloadedBinaryPath();
+
+  let seed: number;
+  if (fingerprintSeed !== undefined) {
+    seed = fingerprintSeed;
+    // Also persist the explicit seed so the profile stays consistent.
+    if (profileDir) {
+      if (!existsSync(profileDir)) mkdirSync(profileDir, {recursive: true});
+      writeFileSync(path.join(profileDir, '.cloak-seed'), String(seed), 'utf8');
+    }
+  } else {
+    seed = profileDir ? getOrCreateSeed(profileDir) : randomInt(10000, 100000);
+  }
+
+  // ALWAYS spoof as Windows desktop — even on macOS.
+  //
+  // Reason: CloakBrowser ships 57 C++ fingerprint patches for Linux/Windows
+  // platform builds but only 26 for macOS (per cloak's own README — the macOS
+  // build leaves real GPU strings and several other signals untouched because
+  // the small pool of real Mac GPUs makes spoofed values *more* detectable
+  // than real ones in their target scraping scenarios).
+  //
+  // For this MCP's use case (debugging strong anti-bot sites), the full
+  // Windows-profile spoof is strictly better — it activates all 57 patches
+  // and reports a generic Windows desktop fingerprint that anti-bot databases
+  // see by the millions.
+  //
+  // CloakBrowser's own troubleshooting (README §"macOS: Blocked on some sites
+  // that pass on Linux") explicitly recommends this when macOS profile gets
+  // blocked: "switch to a Windows fingerprint profile by passing
+  // stealth_args=False and manually setting --fingerprint-platform=windows".
+  const platform = 'windows';
+
+  // NOTE: We intentionally do NOT include `--no-sandbox` here even though
+  // CloakBrowser's getDefaultStealthArgs adds it. Their default targets
+  // Docker/Linux-CI use cases where the setuid sandbox helper isn't available.
+  // This MCP is a desktop debugging tool — the OS sandbox works fine,
+  // and `--no-sandbox` triggers Chrome's "unsupported command-line flag"
+  // infobar that hangs over every tab.
+  return {
+    executablePath,
+    args: [`--fingerprint=${seed}`, `--fingerprint-platform=${platform}`],
+  };
+}
+
+async function resolveDownloadedBinaryPath(): Promise<string> {
   const cloak = await loadCloakBrowser();
 
   // cloakbrowser writes download progress to stdout (`console.log`).
   // We must redirect those writes to stderr to avoid corrupting the MCP
   // JSON-RPC channel — see the helper's docstring above.
-  const executablePath = await withStdoutRedirectedToStderr(async () => {
+  return await withStdoutRedirectedToStderr(async () => {
     if (!cloak.binaryInfo().installed) {
       process.stderr.write(
         '[js-reverse-mcp] Downloading CloakBrowser stealth binary (~200MB, one-time setup)...\n',
@@ -132,16 +200,4 @@ export async function setupCloak(
     }
     return cloak.ensureBinary();
   });
-
-  const seed = profileDir
-    ? getOrCreateSeed(profileDir)
-    : randomInt(10000, 100000);
-
-  // Follow the current CloakBrowser platform profile and future stealth flags,
-  // but keep this desktop debugging server sandboxed and replace the random
-  // upstream fingerprint with our profile-stable seed.
-  return {
-    executablePath,
-    args: buildCloakArgs(cloak.getDefaultStealthArgs(), seed),
-  };
 }

@@ -5,13 +5,9 @@
  */
 
 import {basename, dirname, join} from 'node:path';
-import * as nodeTest from 'node:test';
+import {snapshot} from 'node:test';
 
-import '../src/polyfill.js';
-
-nodeTest.snapshot?.setResolveSnapshotPath(
-  (testFilePath: string | undefined) => {
-    if (!testFilePath) return 'unknown.snapshot';
-    return join(dirname(testFilePath), `${basename(testFilePath)}.snapshot`);
-  },
-);
+snapshot.setResolveSnapshotPath((testFilePath: string | undefined) => {
+  if (!testFilePath) return 'unknown.snapshot';
+  return join(dirname(testFilePath), `${basename(testFilePath)}.snapshot`);
+});

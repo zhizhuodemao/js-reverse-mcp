@@ -4,6 +4,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import {AggregatedIssue} from '../node_modules/chrome-devtools-frontend/mcp/mcp.js';
+
+import {mapIssueToMessageObject} from './DevtoolsUtils.js';
 import type {ConsoleMessageData} from './formatters/consoleFormatter.js';
 import {
   formatConsoleArgValue,
@@ -33,21 +36,19 @@ import {
   formatWebSocketConnectionShort,
   formatWebSocketConnectionVerbose,
 } from './formatters/websocketFormatter.js';
-import {formatBrowserUrlForOutput} from './LocalFileAccess.js';
 import type {McpContext} from './McpContext.js';
 import type {
   ConsoleMessage,
   ImageContent,
   TextContent,
 } from './third_party/index.js';
-import {ToolError} from './ToolError.js';
 import type {ImageContentData, Response} from './tools/ToolDefinition.js';
 import {paginate} from './utils/pagination.js';
 import type {PaginationOptions} from './utils/types.js';
 
 export class McpResponse implements Response {
   #includePages = false;
-  #pagesPagination?: PaginationOptions;
+  #contextDetached = false;
   #attachedNetworkRequestId?: number;
   #attachedConsoleMessageId?: number;
   #textResponseLines: string[] = [];
@@ -74,26 +75,17 @@ export class McpResponse implements Response {
     includePreservedConnections?: boolean;
   };
   #attachedWebSocketId?: number;
-  #structuredData: Record<string, unknown> = {};
 
-  setStructuredContent(value: Record<string, unknown>): void {
-    this.#structuredData = {...this.#structuredData, ...value};
-  }
-
-  createStructuredContent(toolName: string): Record<string, unknown> {
-    return {
-      ok: true,
-      tool: toolName,
-      summary:
-        this.#textResponseLines.find(line => line.trim().length > 0) ??
-        `${toolName} completed`,
-      data: this.#structuredData,
-    };
-  }
-
-  setIncludePages(value: boolean, options?: PaginationOptions): void {
+  setIncludePages(value: boolean): void {
     this.#includePages = value;
-    this.#pagesPagination = value ? options : undefined;
+  }
+
+  setContextDetached(value: boolean): void {
+    this.#contextDetached = value;
+  }
+
+  get contextDetached(): boolean {
+    return this.#contextDetached;
   }
 
   setIncludeNetworkRequests(
@@ -242,6 +234,13 @@ export class McpResponse implements Response {
     toolName: string,
     context: McpContext,
   ): Promise<Array<TextContent | ImageContent>> {
+    if (this.#contextDetached) {
+      return this.#toContent([
+        `# ${toolName} response`,
+        ...this.#textResponseLines,
+      ]);
+    }
+
     if (this.#includePages) {
       await context.createPagesSnapshot();
     }
@@ -286,6 +285,16 @@ export class McpResponse implements Response {
             }),
           ),
         };
+      } else if (message instanceof AggregatedIssue) {
+        const mappedIssueMessage = mapIssueToMessageObject(message);
+        if (!mappedIssueMessage)
+          throw new Error(
+            "Can't prpovide detals for the msgid " + consoleMessageStableId,
+          );
+        consoleData = {
+          consoleMessageStableId,
+          ...mappedIssueMessage,
+        };
       } else {
         consoleData = {
           consoleMessageStableId,
@@ -294,7 +303,6 @@ export class McpResponse implements Response {
           args: [],
         };
       }
-      this.setStructuredContent({message: consoleData});
     }
 
     let consoleListData: ConsoleMessageData[] | undefined;
@@ -308,6 +316,9 @@ export class McpResponse implements Response {
         messages = messages.filter(message => {
           if ('type' in message) {
             return normalizedTypes.has(message.type());
+          }
+          if (message instanceof AggregatedIssue) {
+            return normalizedTypes.has('issue');
           }
           return normalizedTypes.has('error');
         });
@@ -325,6 +336,14 @@ export class McpResponse implements Response {
                 type: consoleMessage.type(),
                 message: consoleMessage.text(),
                 argCount: consoleMessage.args().length,
+              };
+            }
+            if (item instanceof AggregatedIssue) {
+              const mappedIssueMessage = mapIssueToMessageObject(item);
+              if (!mappedIssueMessage) return null;
+              return {
+                consoleMessageStableId,
+                ...mappedIssueMessage,
               };
             }
             return {
@@ -362,27 +381,31 @@ export class McpResponse implements Response {
       response.push(line);
     }
 
+    const networkConditions = context.getNetworkConditions();
+    if (networkConditions) {
+      response.push(`## Network emulation`);
+      response.push(`Emulating: ${networkConditions}`);
+      response.push(
+        `Default navigation timeout set to ${context.getNavigationTimeout()} ms`,
+      );
+    }
+
+    const cpuThrottlingRate = context.getCpuThrottlingRate();
+    if (cpuThrottlingRate > 1) {
+      response.push(`## CPU emulation`);
+      response.push(`Emulating: ${cpuThrottlingRate}x slowdown`);
+    }
+
     if (this.#includePages) {
       const parts = [`## Pages`];
-      const pages = context.getPages();
-      const pageData = this.#dataWithPagination(pages, this.#pagesPagination);
-      parts.push(...pageData.info);
-      for (let offset = 0; offset < pageData.items.length; offset++) {
-        const page = pageData.items[offset];
-        const idx = pageData.startIndex + offset;
+      let idx = 0;
+      for (const page of context.getPages()) {
         parts.push(
-          `${idx}: ${formatBrowserUrlForOutput(page.url())}${context.isPageSelected(page) ? ' [selected]' : ''}`,
+          `${idx}: ${page.url()}${context.isPageSelected(page) ? ' [selected]' : ''}`,
         );
+        idx++;
       }
       response.push(...parts);
-      this.setStructuredContent({
-        pages: pageData.items.map((page, offset) => ({
-          pageIdx: pageData.startIndex + offset,
-          url: formatBrowserUrlForOutput(page.url()),
-          selected: context.isPageSelected(page),
-        })),
-        pagination: pageData.pagination,
-      });
 
       // Show selected frame if not main frame
       const selectedFrame = context.getSelectedFrame();
@@ -403,6 +426,12 @@ export class McpResponse implements Response {
 
     if (this.#networkRequestsOptions?.include) {
       let requests = context.getNetworkRequests();
+
+      // Automatically filter out Patchright addInitScript injection requests.
+      // These are not real page traffic and pollute the network list.
+      requests = requests.filter(
+        r => !r.url().includes('patchright-init-script-inject.internal'),
+      );
 
       // Apply HTTP method filtering if specified (case-insensitive)
       if (this.#networkRequestsOptions.methods?.length) {
@@ -453,18 +482,16 @@ export class McpResponse implements Response {
         response.push(`## Set-Cookie flow for ${cookieName}`);
         response.push('Matched response Set-Cookie updates, oldest first.');
         response.push(
-          'Coverage: current captured network queue only; earlier updates may be missing if capture started late or the FIFO queue rolled over.',
+          'Pagination ignored: Set-Cookie flow shows all matching updates in the current captured queue.',
         );
-        const flowData = this.#dataWithPagination(
-          flowEntries,
-          this.#networkRequestsOptions.pagination,
+        response.push(
+          'Coverage: current captured network queue only; earlier updates may be missing if capture started late or the FIFO queue rolled over.',
         );
         if (flowEntries.length) {
           const updateLabel =
             flowEntries.length === 1 ? 'request update' : 'request updates';
           response.push(`${flowEntries.length} ${updateLabel}`);
-          response.push(...flowData.info);
-          for (const {request, setCookieValues} of flowData.items) {
+          for (const {request, setCookieValues} of flowEntries) {
             response.push(
               await getSetCookieFlowRequestLine(
                 request,
@@ -482,28 +509,19 @@ export class McpResponse implements Response {
             'No Set-Cookie updates found for this cookie in the current captured network queue.',
           );
         }
-        this.setStructuredContent({
-          cookieFlow: flowData.items.map(({request, setCookieValues}) => ({
-            reqid: context.getNetworkRequestStableId(request),
-            url: request.url(),
-            method: request.method(),
-            setCookieValues,
-          })),
-          pagination: flowData.pagination,
-        });
       } else {
         // Show newest requests first
-        requests = [...requests].reverse();
+        requests.reverse();
 
         response.push('## Network requests');
-        const data = this.#dataWithPagination(
-          requests,
-          this.#networkRequestsOptions.pagination ?? {
-            pageSize: 20,
-            pageIdx: 0,
-          },
-        );
         if (requests.length) {
+          const data = this.#dataWithPagination(
+            requests,
+            this.#networkRequestsOptions.pagination ?? {
+              pageSize: 20,
+              pageIdx: 0,
+            },
+          );
           response.push(...data.info);
           for (const request of data.items) {
             response.push(
@@ -519,19 +537,6 @@ export class McpResponse implements Response {
         } else {
           response.push('No requests found.');
         }
-        this.setStructuredContent({
-          requests: await Promise.all(
-            data.items.map(async request => ({
-              reqid: context.getNetworkRequestStableId(request),
-              url: request.url(),
-              method: request.method(),
-              resourceType: request.resourceType(),
-              status: await getStatusFromRequestAsync(request),
-              pending: isRequestPending(request),
-            })),
-          ),
-          pagination: data.pagination,
-        });
       }
     }
 
@@ -539,22 +544,18 @@ export class McpResponse implements Response {
       const messages = data.consoleListData ?? [];
 
       response.push('## Console messages');
-      const consoleData = this.#dataWithPagination(
-        messages,
-        this.#consoleDataOptions.pagination,
-      );
       if (messages.length) {
-        response.push(...consoleData.info);
+        const data = this.#dataWithPagination(
+          messages,
+          this.#consoleDataOptions.pagination,
+        );
+        response.push(...data.info);
         response.push(
-          ...consoleData.items.map(message => formatConsoleEventShort(message)),
+          ...data.items.map(message => formatConsoleEventShort(message)),
         );
       } else {
         response.push('<no console messages found>');
       }
-      this.setStructuredContent({
-        messages: consoleData.items,
-        pagination: consoleData.pagination,
-      });
     }
 
     // WebSocket connections list
@@ -572,11 +573,11 @@ export class McpResponse implements Response {
       }
 
       response.push('## WebSocket connections');
-      const paginatedData = this.#dataWithPagination(
-        connections,
-        this.#webSocketOptions.pagination,
-      );
       if (connections.length) {
+        const paginatedData = this.#dataWithPagination(
+          connections,
+          this.#webSocketOptions.pagination,
+        );
         response.push(...paginatedData.info);
         for (const ws of paginatedData.items) {
           response.push(
@@ -594,16 +595,6 @@ export class McpResponse implements Response {
       } else {
         response.push('<no WebSocket connections found>');
       }
-      this.setStructuredContent({
-        connections: paginatedData.items.map(ws => ({
-          wsid: context.getWebSocketStableId(ws),
-          url: ws.connection.url,
-          status: ws.connection.status,
-          frameCount: ws.frames.length,
-          version: ws.version,
-        })),
-        pagination: paginatedData.pagination,
-      });
     }
 
     // Single WebSocket connection details
@@ -614,10 +605,11 @@ export class McpResponse implements Response {
       );
     }
 
-    const text: TextContent = {
-      type: 'text',
-      text: response.join('\n'),
-    };
+    return this.#toContent(response);
+  }
+
+  #toContent(response: string[]): Array<TextContent | ImageContent> {
+    const text: TextContent = {type: 'text', text: response.join('\n')};
     const images: ImageContent[] = this.#images.map(imageData => {
       return {
         type: 'image',
@@ -632,37 +624,25 @@ export class McpResponse implements Response {
     const response = [];
     const paginationResult = paginate<T>(data, pagination);
     if (paginationResult.invalidPage) {
-      throw new ToolError(
-        'INVALID_ARGUMENT',
-        `pageIdx ${pagination?.pageIdx} is outside the available page range 0-${paginationResult.totalPages - 1}.`,
-      );
+      response.push('Invalid page number provided. Showing first page.');
     }
 
     const {startIndex, endIndex, currentPage, totalPages} = paginationResult;
     response.push(
-      data.length === 0
-        ? `Showing 0 of 0 (Page ${currentPage + 1} of ${totalPages}).`
-        : `Showing ${startIndex + 1}-${endIndex} of ${data.length} (Page ${currentPage + 1} of ${totalPages}).`,
+      `Showing ${startIndex + 1}-${endIndex} of ${data.length} (Page ${currentPage + 1} of ${totalPages}).`,
     );
-    if (paginationResult.hasNextPage) {
-      response.push(`Next page: ${currentPage + 1}`);
-    }
-    if (paginationResult.hasPreviousPage) {
-      response.push(`Previous page: ${currentPage - 1}`);
+    if (pagination) {
+      if (paginationResult.hasNextPage) {
+        response.push(`Next page: ${currentPage + 1}`);
+      }
+      if (paginationResult.hasPreviousPage) {
+        response.push(`Previous page: ${currentPage - 1}`);
+      }
     }
 
     return {
       info: response,
       items: paginationResult.items,
-      startIndex,
-      pagination: {
-        pageIdx: currentPage,
-        pageSize: pagination?.pageSize ?? 20,
-        totalItems: data.length,
-        totalPages,
-        hasNextPage: paginationResult.hasNextPage,
-        hasPreviousPage: paginationResult.hasPreviousPage,
-      },
     };
   }
 
@@ -690,16 +670,6 @@ export class McpResponse implements Response {
     }
 
     const httpRequest = context.getNetworkRequestById(id);
-    this.setStructuredContent({
-      request: {
-        reqid: id,
-        url: httpRequest.url(),
-        method: httpRequest.method(),
-        resourceType: httpRequest.resourceType(),
-        status: await getStatusFromRequestAsync(httpRequest),
-        pending: isRequestPending(httpRequest),
-      },
-    });
     response.push(`## Request ${httpRequest.url()}`);
     response.push(`Status:  ${await getStatusFromRequestAsync(httpRequest)}`);
     response.push(`### Timing`);
@@ -740,7 +710,7 @@ export class McpResponse implements Response {
     if (isRequestPending(httpRequest)) {
       response.push(`### Pending Request`);
       response.push(
-        `${getPendingRequestStatus()} Resume execution with pause_or_resume(action="resume"), then retry if you need response data.`,
+        `${getPendingRequestStatus()} Resume execution with pause_or_resume, then retry if you need response data.`,
       );
     }
 

@@ -13,21 +13,16 @@ import {
   closeBrowser,
   ensureBrowserConnected,
   ensureBrowserLaunched,
+  getRuntimeLaunchOverrides,
 } from './browser.js';
-import type {BrowserResult} from './browser.js';
+import type {BrowserResult, ManagedBrowser} from './browser.js';
+import {loadBrowserConnectionConfig} from './browserConfig.js';
 import {parseArguments} from './cli.js';
-import {
-  assertBrowserUrlAllowed,
-  configureAllowedRoots,
-  getAllowedRoots,
-} from './LocalFileAccess.js';
-import {
-  formatLogValue,
-  formatToolErrorLog,
-  logger,
-  saveLogsToFile,
-  warnAboutUnsafeDebugLogging,
-} from './logger.js';
+import {features} from './features.js';
+import {resolveProxyGeo, resolveLocalGeo} from './geoip.js';
+import {resolveHumanConfig} from './human.js';
+import {loadIssueDescriptions} from './issue-descriptions.js';
+import {logger, saveLogsToFile} from './logger.js';
 import {McpContext} from './McpContext.js';
 import {McpResponse} from './McpResponse.js';
 import {Mutex} from './Mutex.js';
@@ -37,21 +32,18 @@ import {
   type CallToolResult,
   SetLevelRequestSchema,
 } from './third_party/index.js';
-import {runAbortableOperation} from './ToolCallRunner.js';
-import {normalizeToolError} from './ToolError.js';
+import {ToolCategory} from './tools/categories.js';
+import * as batchTools from './tools/batch.js';
+import * as cloakCompatTools from './tools/cloakCompat.js';
 import * as consoleTools from './tools/console.js';
 import * as debuggerTools from './tools/debugger.js';
 import * as frameTools from './tools/frames.js';
-import * as interactionTools from './tools/interaction.js';
 import * as networkTools from './tools/network.js';
 import * as pagesTools from './tools/pages.js';
 import * as screenshotTools from './tools/screenshot.js';
 import * as scriptTools from './tools/script.js';
 import * as siteDataTools from './tools/siteData.js';
-import {
-  TOOL_OUTPUT_SCHEMA,
-  type ToolDefinition,
-} from './tools/ToolDefinition.js';
+import type {ToolDefinition} from './tools/ToolDefinition.js';
 import * as websocketTools from './tools/websocket.js';
 
 // Read the version from package.json at runtime so it never drifts from the
@@ -66,15 +58,23 @@ const VERSION = (
   ) as {version: string}
 ).version;
 
-const SERVER_INSTRUCTIONS = `Use purpose-built tools for network, source, debugger, and browser-state evidence. Use evaluate_script directly for requested DOM/page state, web storage, page-defined globals, paused-frame expressions, or browser-side local-file processing when no narrower tool applies. Reuse returned IDs only within each tool's documented lifetime; prefer a script URL because scriptId expires on reload, navigation, or debugger frame/target change.
-
-For captured HTTP/API traffic, redirects, HTTP authentication flows, or cookie provenance, start with list_network_requests. To find where an exact cookie was created, refreshed, rotated, overwritten, or deleted—including HttpOnly, Secure, and SameSite cookies—call list_network_requests with cookieName. Then inspect the returned reqid or export outputPart="responseHeaders" for complete Set-Cookie values and attributes. Use get_request_initiator on a captured reqid to locate client-side JavaScript that initiated that request, if any. Initiator CDP data is not retroactive: if an older reqid has no initiator, reproduce the action after network capability is active and inspect the new reqid, or set break_on_xhr before reproduction. If runtime arguments or local variables are still needed, set break_on_xhr with a narrow URL substring, reproduce the request, inspect get_paused_info, optionally evaluate in the paused frame, and explicitly resume execution.
-
-For code discovery, use search_in_sources when you know text and list_scripts when you do not; read a bounded region with get_script_source or save a complete/minified source with save_script_source. Use get_websocket_messages for WebSocket frames rather than the HTTP upgrade request. WebSocket frame capture is not retroactive: call get_websocket_messages once before reloading or reproducing an already-finished socket flow because earlier frames cannot be recovered. Select the correct page before page-scoped work. Select a frame for iframe-specific source, debugger, evaluate, or click work; network and cookie evidence is page-scoped and does not require frame selection. Prefer click_element for one known interaction. For code evaluation, clicks, deletion of state/evidence, or breakpoint removal, set confirm=true only when the user explicitly authorizes that specific effect; otherwise request confirmation.`;
-
 export const args = parseArguments(VERSION);
-configureAllowedRoots(args.allowedRoots);
-warnAboutUnsafeDebugLogging();
+
+const savedBrowserConfig = loadBrowserConnectionConfig();
+const cliConfiguredBrowser: ManagedBrowser | undefined = args.edge
+  ? 'edge'
+  : args.cloak
+    ? 'cloak'
+    : undefined;
+const configuredBrowser: ManagedBrowser =
+  cliConfiguredBrowser ?? savedBrowserConfig.browser ?? 'chrome';
+const configuredBrowserBinaryPath =
+  configuredBrowser === 'edge'
+    ? (args.edgeBinaryPath ?? savedBrowserConfig.edgeBinaryPath)
+    : configuredBrowser === 'cloak'
+      ? (args.cloakBinaryPath ?? savedBrowserConfig.cloakBinaryPath)
+      : undefined;
+cloakCompatTools.setBrowserConfig(configuredBrowser, configuredBrowserBinaryPath);
 
 const logFile = args.logFile ? saveLogsToFile(args.logFile) : undefined;
 
@@ -83,19 +83,39 @@ const server = new McpServer(
   {
     name: 'js-reverse',
     title: 'JS Reverse Engineering MCP Server',
-    description: `Agent-oriented JavaScript reverse engineering through Chrome DevTools (v${VERSION}): inspect HTTP and WebSocket evidence, trace Set-Cookie provenance and request initiators, search scripts, debug breakpoints, and perform controlled page interactions. Patchright provides the supporting anti-detection browser layer.`,
+    description: `JavaScript reverse engineering and debugging via Chrome DevTools (v${VERSION}). Built on Patchright anti-detection engine — passes mainstream browser fingerprint checks (Zhihu, Google, etc.) out of the box.`,
     version: VERSION,
   },
-  {
-    capabilities: {logging: {}},
-    instructions: SERVER_INSTRUCTIONS,
-  },
+  {capabilities: {logging: {}}},
 );
 server.server.setRequestHandler(SetLevelRequestSchema, () => {
   return {};
 });
 
 let context: McpContext | undefined;
+
+const NO_BROWSER_CONTEXT = createNoBrowserContext();
+
+function createNoBrowserContext(): McpContext {
+  const frame = {
+    url: () => 'about:blank',
+    name: () => '',
+  };
+  const page = {
+    url: () => 'about:blank',
+    mainFrame: () => frame,
+  };
+  return {
+    createPagesSnapshot: () => Promise.resolve(),
+    getNetworkConditions: () => '',
+    getNavigationTimeout: () => 0,
+    getCpuThrottlingRate: () => 1,
+    getPages: () => [],
+    getSelectedPage: () => page,
+    getSelectedFrame: () => frame,
+    isPageSelected: () => false,
+  } as unknown as McpContext;
+}
 
 // No JS-level init scripts — Patchright's protocol-layer stealth handles
 // automation signal suppression. JS patches (Error.prepareStackTrace, screen
@@ -106,14 +126,49 @@ let context: McpContext | undefined;
 async function getContext(): Promise<McpContext> {
   let result: BrowserResult;
   if (args.browserUrl) {
-    result = await ensureBrowserConnected({
-      browserURL: args.browserUrl,
-    });
+    result = await ensureBrowserConnected({browserURL: args.browserUrl});
   } else {
+    const runtimeOverrides = getRuntimeLaunchOverrides();
+    const managedBrowser = runtimeOverrides?.browser ?? configuredBrowser;
+    const browserBinaryPath =
+      runtimeOverrides?.binaryPath ??
+      (managedBrowser === 'edge'
+        ? (args.edgeBinaryPath ?? savedBrowserConfig.edgeBinaryPath)
+        : managedBrowser === 'cloak'
+          ? (args.cloakBinaryPath ?? savedBrowserConfig.cloakBinaryPath)
+          : undefined);
+
+    // --geoip: resolve timezone/locale from the proxy's exit IP before launch.
+    let locale = args.locale;
+    let timezone = args.timezone;
+    if (args.geoip) {
+      try {
+        const geo = args.proxy
+          ? await resolveProxyGeo(args.proxy)
+          : await resolveLocalGeo();
+        if (geo.timezone && !args.timezone) timezone = geo.timezone;
+        if (geo.locale && !args.locale) locale = geo.locale;
+        logger(
+          `GeoIP resolved: ip=${geo.ip} country=${geo.country} locale=${locale} timezone=${timezone}`,
+        );
+      } catch (e) {
+        logger('GeoIP lookup failed (proceeding without geo settings):', e);
+      }
+    }
     result = await ensureBrowserLaunched({
       isolated: args.isolated,
       logFile,
-      cloak: args.cloak,
+      browser: managedBrowser,
+      browserBinaryPath,
+      fingerprintSeed: args.fingerprintSeed,
+      proxy: args.proxy,
+      locale,
+      timezone,
+      headless: args.headless,
+      blockWebRtc: args.blockWebRtc,
+      blockImages: args.blockImages,
+      windowWidth: args.windowWidth,
+      windowHeight: args.windowHeight,
     });
   }
 
@@ -121,130 +176,145 @@ async function getContext(): Promise<McpContext> {
     context?.dispose();
     context = await McpContext.from(result.context, logger);
   }
+  // Propagate humanize settings to compatibility tools layer.
+  cloakCompatTools.setHumanizeConfig(
+    args.humanize ?? false,
+    resolveHumanConfig(
+      (args.humanPreset ?? 'default') as 'default' | 'careful',
+    ),
+  );
+  // Propagate startup settings so browser_binary_info can report effective
+  // browser state without importing main.ts.
+  cloakCompatTools.setBrowserConfig(
+    configuredBrowser,
+    configuredBrowserBinaryPath,
+  );
   return context;
 }
 
 const logDisclaimers = () => {
-  const roots = getAllowedRoots();
   console.error(
     `js-reverse-mcp exposes content of the browser instance to the MCP clients allowing them to inspect,
 debug, and modify any data in the browser or DevTools.
-Avoid sharing sensitive or personal information that you do not want to share with MCP clients.
-
-Some tools can read from and write to the local filesystem. ${
-      roots
-        ? `Access is restricted to: ${roots.join(', ')}`
-        : 'No allowed roots are configured, so local-file access is unrestricted. Use --allowedRoots to restrict it.'
-    }`,
+Avoid sharing sensitive or personal information that you do not want to share with MCP clients.`,
   );
 };
 
 const toolMutex = new Mutex();
 const DEFAULT_TOOL_TIMEOUT_MS = 35_000;
 const SHUTDOWN_TIMEOUT_MS = 5_000;
-const PAGE_RECOVERY_TOOLS = new Set([
-  'new_page',
-  'navigate_page',
-  'select_page',
-]);
 
 function getErrorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function errorResult(toolName: string, error: unknown): CallToolResult {
-  const normalized = normalizeToolError(error);
+function errorResult(text: string): CallToolResult {
   return {
     content: [
       {
         type: 'text',
-        text: `[${normalized.code}] ${normalized.message}`,
+        text,
       },
     ],
-    structuredContent: {
-      ok: false,
-      tool: toolName,
-      summary: normalized.message,
-      error: {
-        code: normalized.code,
-        message: normalized.message,
-        retryable: normalized.retryable,
-      },
-    },
     isError: true,
   };
 }
 
+function withToolTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  toolName: string,
+): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(
+        new Error(
+          `Tool "${toolName}" timed out after ${timeoutMs}ms. If execution is paused at a breakpoint, call pause_or_resume and retry.`,
+        ),
+      );
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  });
+}
+
 function registerTool(tool: ToolDefinition): void {
-  const {category, ...annotations} = tool.annotations;
   server.registerTool(
     tool.name,
     {
       description: tool.description,
       inputSchema: tool.schema,
-      outputSchema: tool.outputSchema ?? TOOL_OUTPUT_SCHEMA,
-      annotations,
-      _meta: {'io.github.zhizhuodemao/category': category},
+      annotations: tool.annotations,
     },
-    async (params, extra): Promise<CallToolResult> => {
+    async (params): Promise<CallToolResult> => {
       let guard: InstanceType<typeof Mutex.Guard>;
       try {
-        guard = await toolMutex.acquire({
-          timeoutMs: DEFAULT_TOOL_TIMEOUT_MS,
-          signal: extra.signal,
-        });
+        guard = await toolMutex.acquire({timeoutMs: DEFAULT_TOOL_TIMEOUT_MS});
       } catch (error) {
-        return errorResult(tool.name, error);
+        return errorResult(getErrorText(error));
       }
 
       try {
-        logger(`${tool.name} request: ${formatLogValue(params)}`);
-        // Browser startup is shared across callers and can legitimately take
-        // longer than an ordinary tool call (notably the first cloak setup).
-        // Keep the mutex until the shared start settles, then apply the tool's
-        // execution budget to the actual operation.
-        const context = await getContext();
-        logger(`${tool.name} context: resolved`);
+        return await withToolTimeout(
+          (async () => {
+            logger(
+              `${tool.name} request: ${JSON.stringify(params, null, '  ')}`,
+            );
+            const requiresBrowserContext =
+              tool.requiresBrowserContext ?? true;
+            const toolContext = requiresBrowserContext
+              ? await getContext()
+              : context;
+            logger(
+              `${tool.name} context: ${toolContext ? 'resolved' : 'not required'}`,
+            );
 
-        const timeoutMs = tool.timeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS;
-        return await runAbortableOperation(
-          async signal => {
-            signal.throwIfAborted();
-
-            if (!PAGE_RECOVERY_TOOLS.has(tool.name)) {
-              assertBrowserUrlAllowed(context.getSelectedPage().url());
+            // Navigation and browser-state tools must operate in CDP silence
+            // except for their own explicit protocol calls.
+            // Anti-bot systems detect ANY CDP activity during page load,
+            // including session creation from detectOpenDevToolsWindows().
+            if (
+              requiresBrowserContext &&
+              toolContext &&
+              tool.annotations.category !== ToolCategory.NAVIGATION &&
+              tool.annotations.category !== ToolCategory.BROWSER_STATE
+            ) {
+              await toolContext.ensureCollectorsInitialized();
+              await toolContext.detectOpenDevToolsWindows();
             }
-            await context.ensureCapabilities(tool.capabilities ?? []);
             const response = new McpResponse();
             await tool.handler(
               {
                 params,
-                signal,
               },
               response,
-              context,
+              toolContext ?? NO_BROWSER_CONTEXT,
             );
 
-            if (!PAGE_RECOVERY_TOOLS.has(tool.name)) {
-              assertBrowserUrlAllowed(context.getSelectedPage().url());
+            if (response.contextDetached) {
+              context?.dispose();
+              context = undefined;
             }
 
-            const content = await response.handle(tool.name, context);
             return {
-              content,
-              structuredContent: response.createStructuredContent(tool.name),
+              content: await response.handle(
+                tool.name,
+                toolContext ?? NO_BROWSER_CONTEXT,
+              ),
             };
-          },
-          {
-            timeoutMs,
-            timeoutMessage: `Tool "${tool.name}" timed out after ${timeoutMs}ms`,
-            signal: extra.signal,
-          },
+          })(),
+          DEFAULT_TOOL_TIMEOUT_MS,
+          tool.name,
         );
       } catch (err) {
-        const normalized = normalizeToolError(err);
-        logger(formatToolErrorLog(tool.name, normalized));
-        return errorResult(tool.name, normalized);
+        const errorText = getErrorText(err);
+        logger(`${tool.name} error: ${errorText}`);
+        return errorResult(errorText);
       } finally {
         guard.dispose();
       }
@@ -253,10 +323,11 @@ function registerTool(tool: ToolDefinition): void {
 }
 
 const tools = [
+  ...Object.values(batchTools),
+  ...Object.values(cloakCompatTools),
   ...Object.values(consoleTools),
   ...Object.values(debuggerTools),
   ...Object.values(frameTools),
-  ...Object.values(interactionTools),
   ...Object.values(networkTools),
   ...Object.values(pagesTools),
   ...Object.values(screenshotTools),
@@ -264,7 +335,7 @@ const tools = [
   ...Object.values(siteDataTools),
 
   ...Object.values(websocketTools),
-].filter(tool => {
+].filter((tool): tool is ToolDefinition => {
   return (
     typeof tool === 'object' &&
     tool !== null &&
@@ -273,7 +344,7 @@ const tools = [
     'schema' in tool &&
     'annotations' in tool
   );
-}) as unknown as ToolDefinition[];
+});
 
 tools.sort((a, b) => {
   return a.name.localeCompare(b.name);
@@ -370,6 +441,10 @@ process.stdout.on('error', error => {
 
 for (const tool of tools) {
   registerTool(tool);
+}
+
+if (features.issues) {
+  await loadIssueDescriptions();
 }
 
 const transport = new StdioServerTransport();

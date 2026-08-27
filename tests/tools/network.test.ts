@@ -43,8 +43,9 @@ test('cookieName trims input and enters Set-Cookie flow mode', () => {
   assert.equal('cookieRelation' in listNetworkRequests.schema, false);
 });
 
-test('cookieName rejects blank input', () => {
+test('cookieName treats blank input as omitted', () => {
   const schema = zod.object(listNetworkRequests.schema);
+  const parsed = schema.parse({cookieName: '   '});
 
-  assert.throws(() => schema.parse({cookieName: '   '}));
+  assert.equal(parsed.cookieName, undefined);
 });

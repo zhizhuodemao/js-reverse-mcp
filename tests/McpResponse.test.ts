@@ -14,7 +14,31 @@ import type {
   Response as HTTPResponse,
 } from '../src/third_party/index.js';
 
-test('paginates Set-Cookie flow like every other list output', async () => {
+test('formats a detached response without reading the closed browser context', async () => {
+  const context = new Proxy(
+    {},
+    {
+      get: () => {
+        throw new Error('closed context must not be read');
+      },
+    },
+  ) as McpContext;
+  const response = new McpResponse();
+  response.appendResponseLine('browser switched');
+  response.setContextDetached(true);
+
+  assert.equal(response.contextDetached, true);
+  const result = await response.handle('launch_browser', context);
+
+  assert.deepEqual(result, [
+    {
+      type: 'text',
+      text: '# launch_browser response\nbrowser switched',
+    },
+  ]);
+});
+
+test('formats cookieName as complete Set-Cookie flow without pagination', async () => {
   const first = createCookieRequest({
     url: 'https://example.test/first',
     setCookieHeaders: ['_abck=first; Path=/'],
@@ -33,6 +57,8 @@ test('paginates Set-Cookie flow like every other list output', async () => {
     [latest, 88],
   ]);
   const context = {
+    getCpuThrottlingRate: () => 1,
+    getNetworkConditions: () => '',
     getNetworkRequests: () => [first, unrelated, latest],
     getNetworkRequestStableId: (request: HTTPRequest) => ids.get(request) ?? 0,
   } as unknown as McpContext;
@@ -53,89 +79,19 @@ test('paginates Set-Cookie flow like every other list output', async () => {
 
   assert.match(text, /## Set-Cookie flow for _abck/);
   assert.match(text, /Matched response Set-Cookie updates, oldest first\./);
-  assert.match(text, /Showing 1-1 of 2/);
+  assert.match(
+    text,
+    /Pagination ignored: Set-Cookie flow shows all matching updates in the current captured queue\./,
+  );
+  assert.doesNotMatch(text, /Showing 1-1/);
   assert.match(text, /\[23\] 200 GET https:\/\/example\.test\/first/);
   assert.match(text, /set-cookie: _abck=first/);
   assert.doesNotMatch(text, /sid=abc/);
-  assert.doesNotMatch(text, /https:\/\/example\.test\/latest/);
-});
-
-test('network listing does not reverse collector storage in place', async () => {
-  const first = createCookieRequest({
-    url: 'https://example.test/first',
-    setCookieHeaders: [],
-  });
-  const latest = createCookieRequest({
-    url: 'https://example.test/latest',
-    setCookieHeaders: [],
-  });
-  const stored = [first, latest];
-  const ids = new Map<HTTPRequest, number>([
-    [first, 1],
-    [latest, 2],
-  ]);
-  const context = {
-    getNetworkRequests: () => stored,
-    getNetworkRequestStableId: (request: HTTPRequest) => ids.get(request) ?? 0,
-  } as unknown as McpContext;
-
-  const render = async () => {
-    const response = new McpResponse();
-    response.setIncludeNetworkRequests(true);
-    const [content] = await response.format('list_network_requests', context, {
-      bodies: {},
-      consoleData: undefined,
-      consoleListData: undefined,
-    });
-    assert.equal(content.type, 'text');
-    return content.text;
-  };
-
-  const firstRender = await render();
-  const secondRender = await render();
-  for (const text of [firstRender, secondRender]) {
-    assert.ok(text.indexOf('/latest') < text.indexOf('/first'));
-  }
-  assert.deepEqual(stored, [first, latest]);
-});
-
-test('an empty list still returns pagination and rejects later pages', async () => {
-  const context = {
-    getNetworkRequests: () => [],
-  } as unknown as McpContext;
-  const response = new McpResponse();
-  response.setIncludeNetworkRequests(true, {pageIdx: 0});
-  await response.format('list_network_requests', context, {
-    bodies: {},
-    consoleData: undefined,
-    consoleListData: undefined,
-  });
-  assert.deepEqual(response.createStructuredContent('list_network_requests'), {
-    ok: true,
-    tool: 'list_network_requests',
-    summary: 'list_network_requests completed',
-    data: {
-      requests: [],
-      pagination: {
-        pageIdx: 0,
-        pageSize: 20,
-        totalItems: 0,
-        totalPages: 1,
-        hasNextPage: false,
-        hasPreviousPage: false,
-      },
-    },
-  });
-
-  const invalid = new McpResponse();
-  invalid.setIncludeNetworkRequests(true, {pageIdx: 1});
-  await assert.rejects(
-    invalid.format('list_network_requests', context, {
-      bodies: {},
-      consoleData: undefined,
-      consoleListData: undefined,
-    }),
-    /pageIdx 1 is outside/,
+  assert.match(text, /\[88\] 200 GET https:\/\/example\.test\/latest/);
+  assert.match(text, /set-cookie: _abck=latest/);
+  assert.ok(
+    text.indexOf('https://example.test/first') <
+      text.indexOf('https://example.test/latest'),
   );
 });
 

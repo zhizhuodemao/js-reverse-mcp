@@ -4,10 +4,15 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+import type {AggregatedIssue} from '../../node_modules/chrome-devtools-frontend/mcp/mcp.js';
+
 export interface ConsoleMessageData {
   consoleMessageStableId: number;
   type?: string;
+  item?: AggregatedIssue;
   message?: string;
+  count?: number;
+  description?: string;
   argCount?: number;
   args?: string[];
 }
@@ -17,6 +22,9 @@ const CONSOLE_MESSAGE_SIZE_LIMIT = 1000;
 
 // The short format for a console message, based on a previous format.
 export function formatConsoleEventShort(msg: ConsoleMessageData): string {
+  if (msg.type === 'issue') {
+    return `msgid=${msg.consoleMessageStableId} [${msg.type}] ${getSizeLimitedString(msg.message ?? '', CONSOLE_MESSAGE_SIZE_LIMIT)} (count: ${msg.count})`;
+  }
   return `msgid=${msg.consoleMessageStableId} [${msg.type}] ${getSizeLimitedString(msg.message ?? '', CONSOLE_MESSAGE_SIZE_LIMIT)} (${msg.argCount ?? msg.args?.length ?? 0} args)`;
 }
 
@@ -33,10 +41,11 @@ function getArgs(msg: ConsoleMessageData) {
 
 // The verbose format for a console message, including all details.
 export function formatConsoleEventVerbose(msg: ConsoleMessageData): string {
+  const aggregatedIssue = msg.item;
   const result = [
     `ID: ${msg.consoleMessageStableId}`,
-    `Message: ${msg.type}> ${getSizeLimitedString(msg.message ?? '', CONSOLE_MESSAGE_SIZE_LIMIT)}`,
-    formatArgs(msg),
+    `Message: ${msg.type}> ${aggregatedIssue ? formatIssue(aggregatedIssue, msg.description) : getSizeLimitedString(msg.message ?? '', CONSOLE_MESSAGE_SIZE_LIMIT)}`,
+    aggregatedIssue ? undefined : formatArgs(msg),
   ].filter(line => !!line);
   return result.join('\n');
 }
@@ -68,5 +77,31 @@ function formatArgs(consoleData: ConsoleMessageData): string {
     );
   }
 
+  return result.join('\n');
+}
+
+export function formatIssue(
+  issue: AggregatedIssue,
+  description?: string,
+): string {
+  const result: string[] = [];
+
+  let processedMarkdown = description?.trim();
+  // Remove heading in order not to conflict with the whole console message response markdown
+  if (processedMarkdown?.startsWith('# ')) {
+    processedMarkdown = processedMarkdown.substring(2).trimStart();
+  }
+  if (processedMarkdown) result.push(processedMarkdown);
+
+  const links = issue.getDescription()?.links;
+  if (links && links.length > 0) {
+    result.push('Learn more:');
+    for (const link of links) {
+      result.push(`[${link.linkTitle}](${link.link})`);
+    }
+  }
+
+  if (result.length === 0)
+    return 'No details provided for the issue ' + issue.code();
   return result.join('\n');
 }

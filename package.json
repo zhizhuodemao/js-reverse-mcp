@@ -1,6 +1,6 @@
 {
   "name": "js-reverse-mcp",
-  "version": "4.0.3",
+  "version": "3.0.9",
   "description": "JS reverse engineering MCP server with agent-first tool design and built-in anti-detection. 为 AI Agent 设计的 JS 逆向 MCP Server，内置反检测。",
   "keywords": [
     "mcp",
@@ -24,28 +24,26 @@
   "main": "build/src/index.js",
   "scripts": {
     "clean": "node -e \"require('fs').rmSync('build', {recursive: true, force: true})\"",
-    "build": "npm run clean && tsc",
+    "bundle": "npm run clean && npm run build && rollup -c rollup.config.mjs",
+    "build": "tsc && node --experimental-strip-types --no-warnings=ExperimentalWarning scripts/post-build.ts",
     "typecheck": "tsc --noEmit",
     "format": "eslint --cache --fix . && prettier --write --cache .",
     "check-format": "eslint --cache . && prettier --check --cache .",
     "docs": "npm run build && npm run docs:generate && prettier --write --cache docs/",
-    "docs:generate": "node build/scripts/generate-docs.js",
-    "docs:check": "npm run build && node build/scripts/generate-docs.js --check",
-    "eval:routing": "npm run build && node build/scripts/evaluate-tool-routing.js --live",
-    "eval:routing:validate": "npm run build && node build/scripts/evaluate-tool-routing.js --validate-only",
-    "audit:prod": "npm audit --omit=dev --audit-level=high",
+    "docs:generate": "node --experimental-strip-types scripts/generate-docs.ts",
     "start": "npm run build && node build/src/index.js",
     "start-debug": "DEBUG=mcp:* DEBUG_COLORS=false npm run build && node build/src/index.js",
-    "test": "npm run build && npm run test:run",
-    "test:run": "node build/scripts/run-tests.js",
-    "test:only": "npm run build && npm run test:run -- --test-only",
-    "test:only:no-build": "npm run test:run -- --test-only",
-    "test:update-snapshots": "npm run build && npm run test:run -- --test-update-snapshots",
-    "presubmit": "npm run typecheck && npm run check-format && npm test && npm run eval:routing:validate && npm run docs:check && npm run audit:prod && npm pack --dry-run",
-    "prepublishOnly": "npm run presubmit"
+    "test:node20": "node --require ./build/tests/setup.js --test-reporter spec --test-force-exit --test build/tests",
+    "test": "npm run build && node --require ./build/tests/setup.js --no-warnings=ExperimentalWarning --test-reporter spec --test-force-exit --test \"build/tests/**/*.test.js\"",
+    "test:only": "npm run build && node --require ./build/tests/setup.js --no-warnings=ExperimentalWarning --test-reporter spec --test-force-exit --test --test-only \"build/tests/**/*.test.js\"",
+    "test:only:no-build": "node --require ./build/tests/setup.js --no-warnings=ExperimentalWarning --test-reporter spec --test-force-exit --test --test-only \"build/tests/**/*.test.js\"",
+    "test:update-snapshots": "npm run build && node --require ./build/tests/setup.js --no-warnings=ExperimentalWarning --test-force-exit --test --test-update-snapshots \"build/tests/**/*.test.js\"",
+    "prepare": "node --experimental-strip-types scripts/prepare.ts",
+    "verify-server-json-version": "node --experimental-strip-types scripts/verify-server-json-version.ts"
   },
   "files": [
     "build/src",
+    "build/node_modules",
     "LICENSE",
     "!*.tsbuildinfo"
   ],
@@ -62,36 +60,47 @@
   "mcpName": "io.github.zhizhuodemao/js-reverse-mcp",
   "devDependencies": {
     "@eslint/js": "^9.35.0",
+    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-json": "^6.1.0",
+    "@rollup/plugin-node-resolve": "^16.0.3",
     "@stylistic/eslint-plugin": "^5.4.0",
+    "@types/babel__generator": "^7.27.0",
+    "@types/babel__traverse": "^7.28.0",
     "@types/debug": "^4.1.12",
+    "@types/filesystem": "^0.0.36",
     "@types/node": "^24.3.3",
     "@types/sinon": "^21.0.0",
     "@types/yargs": "^17.0.33",
     "@typescript-eslint/eslint-plugin": "^8.43.0",
     "@typescript-eslint/parser": "^8.43.0",
+    "chrome-devtools-frontend": "1.0.1547571",
     "eslint": "^9.35.0",
     "eslint-import-resolver-typescript": "^4.4.4",
     "eslint-plugin-import": "^2.32.0",
     "globals": "^16.4.0",
+    "rollup": "4.53.3",
+    "rollup-plugin-cleanup": "^3.2.1",
+    "rollup-plugin-license": "^3.6.0",
     "sinon": "^21.0.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.43.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "1.29.0",
-    "@zhizhuodemao/patchright": "1.61.1-mcp.2",
+    "@babel/generator": "^7.29.7",
+    "@babel/parser": "^7.29.7",
+    "@babel/traverse": "^7.29.7",
+    "@babel/types": "^7.29.7",
+    "@modelcontextprotocol/sdk": "1.21.1",
     "core-js": "3.47.0",
     "debug": "4.4.3",
     "devtools-protocol": "^0.0.1425554",
+    "patchright": "^1.51.1",
     "prettier": "^3.6.2",
-    "yargs": "18.0.0",
-    "zod": "^4.4.3"
+    "undici": "^6.27.0",
+    "yargs": "18.0.0"
   },
   "optionalDependencies": {
-    "cloakbrowser": "^0.4.10"
-  },
-  "overrides": {
-    "tar": "7.5.22"
+    "cloakbrowser": "^0.3.28"
   },
   "engines": {
     "node": "^20.19.0 || ^22.12.0 || >=23"

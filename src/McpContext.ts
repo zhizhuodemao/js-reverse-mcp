@@ -4,16 +4,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {constants as fsConstants} from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+
+import {type AggregatedIssue} from '../node_modules/chrome-devtools-frontend/mcp/mcp.js';
 
 import {CdpSessionProvider} from './CdpSessionProvider.js';
 import {DebuggerContext} from './DebuggerContext.js';
 import {extractUrlLikeFromDevToolsTitle, urlsEqual} from './DevtoolsUtils.js';
 import type {TrafficSummary} from './formatters/websocketFormatter.js';
-import {assertLocalFileWriteAllowed} from './LocalFileAccess.js';
 import {NetworkCollector, ConsoleCollector} from './PageCollector.js';
 import type {ListenerMap, RequestInitiator} from './PageCollector.js';
 import type {
@@ -25,21 +25,30 @@ import type {
   HTTPRequest,
   Page,
 } from './third_party/index.js';
-import {ToolError} from './ToolError.js';
 import {selectPage} from './tools/pages.js';
 import {CLOSE_PAGE_ERROR} from './tools/ToolDefinition.js';
-import type {
-  Context,
-  DevToolsData,
-  ToolCapability,
-} from './tools/ToolDefinition.js';
+import type {Context, DevToolsData} from './tools/ToolDefinition.js';
+import type {TraceResult} from './trace-processing/parse.js';
 import {WaitForHelper} from './WaitForHelper.js';
 import type {WebSocketData} from './WebSocketCollector.js';
 import {WebSocketCollector} from './WebSocketCollector.js';
 
 const DEFAULT_TIMEOUT = 5_000;
 const NAVIGATION_TIMEOUT = 10_000;
-const MAX_TRAFFIC_SUMMARY_CACHE_ENTRIES = 100;
+
+function getNetworkMultiplierFromString(condition: string | null): number {
+  switch (condition) {
+    case 'Fast 4G':
+      return 1;
+    case 'Slow 4G':
+      return 2.5;
+    case 'Fast 3G':
+      return 5;
+    case 'Slow 3G':
+      return 10;
+  }
+  return 1;
+}
 
 function getExtensionFromMimeType(mimeType: string) {
   switch (mimeType) {
@@ -66,14 +75,17 @@ export class McpContext implements Context {
   #consoleCollector: ConsoleCollector;
   #webSocketCollector: WebSocketCollector;
 
+  #isRunningTrace = false;
+  #networkConditionsMap = new WeakMap<Page, string>();
+  #cpuThrottlingRateMap = new WeakMap<Page, number>();
   #dialog?: Dialog;
   #debuggerContext: DebuggerContext = new DebuggerContext();
   #selectedFrame?: Frame;
 
-  #trafficSummaryCache = new WeakMap<
-    Page,
-    Map<number, {version: number; summary: TrafficSummary}>
-  >();
+  #traceResults: TraceResult[] = [];
+  #trafficSummaryCache = new Map<number, TrafficSummary>();
+
+  #navigationTimeout = NAVIGATION_TIMEOUT;
 
   private constructor(browserContext: BrowserContext, logger: Debugger) {
     this.browserContext = browserContext;
@@ -88,6 +100,7 @@ export class McpContext implements Context {
 
     this.#consoleCollector = new ConsoleCollector(
       this.browserContext,
+      this.sessionProvider,
       collect => {
         return {
           console: event => {
@@ -102,6 +115,9 @@ export class McpContext implements Context {
               collect(error);
             }
           },
+          issue: event => {
+            collect(event);
+          },
         } as ListenerMap;
       },
     );
@@ -112,14 +128,19 @@ export class McpContext implements Context {
     );
   }
 
-  #initializedCapabilities = new Set<ToolCapability>();
-  #capabilityInitializers = new Map<ToolCapability, Promise<void>>();
+  // Whether CDP-heavy collectors have been initialized.
+  // Deferred to avoid polluting the browser with CDP domains during navigation,
+  // which anti-bot systems can detect (Debugger.enable, Network events, etc.).
+  #collectorsInitialized = false;
 
   async #init() {
     await this.createPagesSnapshot();
-    // NOTE: addInitScript is already called in browser.ts (launch/connect).
-    // Do NOT call it again here — double injection causes scripts to run twice
-    // per page load, which can create detectable discrepancies.
+    // NOTE: console bridge is installed on-demand via ensureConsoleBridge() when
+    // evaluate_script or console tools are called. It is NOT installed via
+    // addInitScript here because addInitScript produces a polluting internal
+    // network request (patchright-init-script-inject.internal) that masks real
+    // document requests. addInitScript is only used for persistent hooks and
+    // import_state localStorage injection, where the pollution tradeoff is acceptable.
 
     // Initialize Playwright-level listeners early so that page load requests
     // and console messages are captured immediately. These only register
@@ -128,69 +149,30 @@ export class McpContext implements Context {
     await this.#networkCollector.init();
     await this.#consoleCollector.init();
 
-    // NOTE: CDP-heavy collectors (initiator collection, WebSocket CDP events,
-    // Debugger.enable) are NOT initialized here.
+    // NOTE: CDP-heavy collectors (initiator collection, Audits.enable,
+    // WebSocket CDP events, Debugger.enable) are NOT initialized here.
     // They are lazily initialized on first tool use that needs them,
-    // via ensureCapabilities(). This prevents unrelated CDP domain activation
+    // via ensureCollectorsInitialized(). This prevents CDP domain activation
     // from leaking automation signals during page navigation.
   }
 
   /**
-   * Lazily initialize CDP-dependent collectors (network, websocket, debugger).
+   * Lazily initialize CDP-dependent collectors (network, console, websocket, debugger).
    * Called before any tool that needs collected data.
    * This defers CDP domain activation so that page navigations happen in a
    * "clean" state without Debugger/Network/Runtime domains enabled.
    */
-  async ensureCapabilities(
-    capabilities: readonly ToolCapability[],
-  ): Promise<void> {
-    for (const capability of capabilities) {
-      await this.#ensureCapability(capability);
-    }
-  }
-
-  async #ensureCapability(capability: ToolCapability): Promise<void> {
-    if (this.#initializedCapabilities.has(capability)) {
-      // A popup can be created by the page between tool calls. Collector init
-      // is idempotent and drains any per-page setup already started by the
-      // browser-context event, so "capability ready" also covers current pages.
-      if (capability === 'network') {
-        await this.#networkCollector.initCdp();
-      } else if (capability === 'websocket') {
-        await this.#webSocketCollector.init();
-      }
-      return;
-    }
-    const pending = this.#capabilityInitializers.get(capability);
-    if (pending) {
-      await pending;
-      return;
-    }
-
-    const initializer = (async () => {
-      this.logger(`Initializing capability: ${capability}`);
-      switch (capability) {
-        case 'network':
-          await this.#networkCollector.initCdp();
-          break;
-        case 'websocket':
-          await this.#webSocketCollector.init();
-          break;
-        case 'debugger':
-          await this.#initDebugger();
-          break;
-        case 'devtools-ui':
-          await this.detectOpenDevToolsWindows();
-          break;
-      }
-      this.#initializedCapabilities.add(capability);
-    })();
-    this.#capabilityInitializers.set(capability, initializer);
-    try {
-      await initializer;
-    } finally {
-      this.#capabilityInitializers.delete(capability);
-    }
+  async ensureCollectorsInitialized(): Promise<void> {
+    if (this.#collectorsInitialized) return;
+    this.#collectorsInitialized = true;
+    this.logger('Initializing CDP collectors (deferred)');
+    // Activate CDP-dependent features for network/console collectors
+    // that already have Playwright listeners running.
+    await this.#networkCollector.initCdp();
+    await this.#consoleCollector.initCdp();
+    // WebSocket collector is fully CDP-based, initialize it entirely here.
+    await this.#webSocketCollector.init();
+    await this.#initDebugger();
   }
 
   async #initDebugger(frame?: Frame): Promise<void> {
@@ -198,7 +180,6 @@ export class McpContext implements Context {
     if (!page) {
       return;
     }
-    const savedBreakpoints = this.#debuggerContext.getBreakpoints();
     try {
       let client;
       if (frame && frame !== page.mainFrame()) {
@@ -207,13 +188,8 @@ export class McpContext implements Context {
         client = await this.sessionProvider.getSession(page);
       }
       await this.#debuggerContext.enable(client);
-      if (savedBreakpoints.length > 0) {
-        await this.#debuggerContext.restoreBreakpoints(savedBreakpoints);
-      }
-      await this.#debuggerContext.restoreXHRBreakpoints();
     } catch (error) {
       this.logger('Failed to initialize debugger context', error);
-      throw error;
     }
   }
 
@@ -239,15 +215,14 @@ export class McpContext implements Context {
    * (goto/reload/back/forward).
    */
   async reinitDebugger(): Promise<void> {
-    if (!this.#initializedCapabilities.has('debugger')) return;
-    await this.#debuggerContext.disable({preserveBreakpoints: true});
-    try {
-      await this.#initDebugger();
-    } catch (error) {
-      // The capability is no longer ready. A later debugger tool call will
-      // retry initialization through the normal single-flight path.
-      this.#initializedCapabilities.delete('debugger');
-      throw error;
+    if (!this.#collectorsInitialized) return;
+    // Save breakpoint definitions before disable wipes them
+    const savedBreakpoints = this.#debuggerContext.getBreakpoints();
+    await this.#debuggerContext.disable();
+    await this.#initDebugger();
+    // Restore breakpoints after re-enabling the debugger
+    if (savedBreakpoints.length > 0) {
+      await this.#debuggerContext.restoreBreakpoints(savedBreakpoints);
     }
   }
 
@@ -256,14 +231,9 @@ export class McpContext implements Context {
    * This enables script collection from cross-origin iframes (OOPIFs).
    */
   async reinitDebuggerForFrame(frame: Frame): Promise<void> {
-    if (!this.#initializedCapabilities.has('debugger')) return;
-    await this.#debuggerContext.disable({preserveBreakpoints: true});
-    try {
-      await this.#initDebugger(frame);
-    } catch (error) {
-      this.#initializedCapabilities.delete('debugger');
-      throw error;
-    }
+    if (!this.#collectorsInitialized) return;
+    await this.#debuggerContext.disable();
+    await this.#initDebugger(frame);
   }
 
   static async from(browserContext: BrowserContext, logger: Debugger) {
@@ -300,30 +270,32 @@ export class McpContext implements Context {
 
   getConsoleData(
     includePreservedMessages?: boolean,
-  ): Array<ConsoleMessage | Error> {
+  ): Array<ConsoleMessage | Error | AggregatedIssue> {
     const page = this.getSelectedPage();
     return this.#consoleCollector.getData(page, includePreservedMessages);
   }
 
-  getConsoleMessageStableId(message: ConsoleMessage | Error): number {
+  getConsoleMessageStableId(
+    message: ConsoleMessage | Error | AggregatedIssue,
+  ): number {
     return this.#consoleCollector.getIdForResource(message);
   }
 
-  getConsoleMessageById(id: number): ConsoleMessage | Error {
+  getConsoleMessageById(id: number): ConsoleMessage | Error | AggregatedIssue {
     return this.#consoleCollector.getById(this.getSelectedPage(), id);
   }
 
   async newPage(): Promise<Page> {
     const page = await this.browserContext.newPage();
     await this.createPagesSnapshot();
-    await this.selectPage(page);
+    this.selectPage(page);
     // Always add to network/console collectors — their Playwright listeners
     // are active from startup. addPage() internally handles CDP setup if
     // initCdp() has already been called.
-    await this.#networkCollector.addPage(page);
-    await this.#consoleCollector.addPage(page);
+    this.#networkCollector.addPage(page);
+    this.#consoleCollector.addPage(page);
     // WebSocket collector is fully CDP-based, only add if initialized.
-    if (this.#initializedCapabilities.has('websocket')) {
+    if (this.#collectorsInitialized) {
       await this.#webSocketCollector.addPage(page);
     }
     return page;
@@ -336,13 +308,42 @@ export class McpContext implements Context {
     await page.close({runBeforeUnload: false});
   }
 
-  async stopPageLoading(page: Page): Promise<void> {
-    const session = await this.sessionProvider.getSession(page);
-    await session.send('Page.stopLoading');
-  }
-
   getNetworkRequestById(reqid: number): HTTPRequest {
     return this.#networkCollector.getById(this.getSelectedPage(), reqid);
+  }
+
+  setNetworkConditions(conditions: string | null): void {
+    const page = this.getSelectedPage();
+    if (conditions === null) {
+      this.#networkConditionsMap.delete(page);
+    } else {
+      this.#networkConditionsMap.set(page, conditions);
+    }
+    this.#updateSelectedPageTimeouts();
+  }
+
+  getNetworkConditions(): string | null {
+    const page = this.getSelectedPage();
+    return this.#networkConditionsMap.get(page) ?? null;
+  }
+
+  setCpuThrottlingRate(rate: number): void {
+    const page = this.getSelectedPage();
+    this.#cpuThrottlingRateMap.set(page, rate);
+    this.#updateSelectedPageTimeouts();
+  }
+
+  getCpuThrottlingRate(): number {
+    const page = this.getSelectedPage();
+    return this.#cpuThrottlingRateMap.get(page) ?? 1;
+  }
+
+  setIsRunningPerformanceTrace(x: boolean): void {
+    this.#isRunningTrace = x;
+  }
+
+  isRunningPerformanceTrace(): boolean {
+    return this.#isRunningTrace;
   }
 
   getDialog(): Dialog | undefined {
@@ -383,60 +384,54 @@ export class McpContext implements Context {
     return this.#selectedPage === page;
   }
 
-  async selectPage(newPage: Page): Promise<void> {
+  selectPage(newPage: Page): void {
     const oldPage = this.#selectedPage;
-    const oldFrame = this.#selectedFrame;
     if (oldPage) {
       oldPage.off('dialog', this.#dialogHandler);
     }
     this.#selectedPage = newPage;
     this.#selectedFrame = undefined;
     newPage.on('dialog', this.#dialogHandler);
-    try {
-      this.#setSelectedPageTimeouts();
-      // Reinitialize debugger for the new page before exposing the selection
-      // to the next tool call.
-      await this.reinitDebugger();
-    } catch (error) {
-      newPage.off('dialog', this.#dialogHandler);
-      if (oldPage && !oldPage.isClosed()) {
-        this.#selectedPage = oldPage;
-        this.#selectedFrame = oldFrame?.isDetached() ? undefined : oldFrame;
-        oldPage.on('dialog', this.#dialogHandler);
-        this.#setSelectedPageTimeouts();
-      }
-      throw error;
-    }
+    this.#updateSelectedPageTimeouts();
+    // Reinitialize debugger for the new page
+    void this.reinitDebugger();
   }
 
   getSelectedFrame(): Frame {
     return this.#selectedFrame ?? this.getSelectedPage().mainFrame();
   }
 
-  async selectFrame(frame: Frame): Promise<void> {
+  selectFrame(frame: Frame): void {
+    this.#selectedFrame = frame;
     // Reinitialize debugger for the frame's CDP session
     // so that scripts from cross-origin iframes (OOPIFs) are visible
-    await this.reinitDebuggerForFrame(frame);
-    if (frame.isDetached()) {
-      throw new ToolError(
-        'CONFLICT',
-        'The selected frame was detached while its debugger session was being initialized. List frames and retry with the new frame index.',
-        {retryable: true},
-      );
-    }
-    this.#selectedFrame = frame;
+    void this.reinitDebuggerForFrame(frame);
   }
 
-  async resetSelectedFrame(): Promise<void> {
-    // Reinitialize debugger for the main page's CDP session
-    await this.reinitDebugger();
+  resetSelectedFrame(): void {
     this.#selectedFrame = undefined;
+    // Reinitialize debugger for the main page's CDP session
+    void this.reinitDebugger();
   }
 
-  #setSelectedPageTimeouts() {
+  #updateSelectedPageTimeouts() {
     const page = this.getSelectedPage();
-    page.setDefaultTimeout(DEFAULT_TIMEOUT);
-    page.setDefaultNavigationTimeout(NAVIGATION_TIMEOUT);
+    // For waiters 5sec timeout should be sufficient.
+    // Increased in case we throttle the CPU
+    const cpuMultiplier = this.getCpuThrottlingRate();
+    page.setDefaultTimeout(DEFAULT_TIMEOUT * cpuMultiplier);
+    // 10sec should be enough for the load event to be emitted during
+    // navigations.
+    // Increased in case we throttle the network requests
+    const networkMultiplier = getNetworkMultiplierFromString(
+      this.getNetworkConditions(),
+    );
+    this.#navigationTimeout = NAVIGATION_TIMEOUT * networkMultiplier;
+    page.setDefaultNavigationTimeout(this.#navigationTimeout);
+  }
+
+  getNavigationTimeout() {
+    return this.#navigationTimeout;
   }
 
   /**
@@ -450,13 +445,13 @@ export class McpContext implements Context {
     );
 
     if (!this.#selectedPage || this.#pages.indexOf(this.#selectedPage) === -1) {
-      await this.selectPage(this.#pages[0]);
+      this.selectPage(this.#pages[0]);
     }
 
     // Skip DevTools window detection when collectors aren't initialized.
     // detectOpenDevToolsWindows() creates CDP sessions which leak automation
     // signals to anti-bot systems during navigation.
-    if (this.#initializedCapabilities.has('devtools-ui')) {
+    if (this.#collectorsInitialized) {
       await this.detectOpenDevToolsWindows();
     }
 
@@ -544,7 +539,7 @@ export class McpContext implements Context {
         dir,
         `screenshot.${getExtensionFromMimeType(mimeType)}`,
       );
-      await fs.writeFile(filename, data, {mode: 0o600});
+      await fs.writeFile(filename, data);
       return {filename};
     } catch (err) {
       this.logger(err);
@@ -554,76 +549,51 @@ export class McpContext implements Context {
   async saveFile(
     data: Uint8Array<ArrayBufferLike>,
     filename: string,
-    options: {confirmOverwrite?: boolean} = {},
   ): Promise<{filename: string}> {
-    let filePath = path.resolve(filename);
     try {
-      filePath = assertLocalFileWriteAllowed(filePath);
-      const flags =
-        fsConstants.O_WRONLY |
-        fsConstants.O_CREAT |
-        fsConstants.O_NOFOLLOW |
-        fsConstants.O_NONBLOCK |
-        (options.confirmOverwrite ? 0 : fsConstants.O_EXCL);
-      const handle = await fs.open(filePath, flags, 0o600);
-      try {
-        if (!(await handle.stat()).isFile()) {
-          throw new ToolError(
-            'INVALID_ARGUMENT',
-            `Local file output must target a regular file: ${filePath}`,
-          );
-        }
-        await handle.chmod(0o600);
-        if (options.confirmOverwrite) {
-          await handle.truncate(0);
-        }
-        await handle.writeFile(data);
-      } finally {
-        await handle.close();
-      }
+      const filePath = path.resolve(filename);
+      await fs.writeFile(filePath, data);
       return {filename: filePath};
     } catch (err) {
-      if (err instanceof ToolError) {
-        throw err;
-      }
-      if (
-        typeof err === 'object' &&
-        err !== null &&
-        'code' in err &&
-        err.code === 'EEXIST'
-      ) {
-        throw new ToolError(
-          'CONFIRMATION_REQUIRED',
-          `File already exists: ${filePath}. Pass confirmOverwrite=true to replace it.`,
-          {cause: err},
-        );
-      }
-      if (
-        typeof err === 'object' &&
-        err !== null &&
-        'code' in err &&
-        (err.code === 'ELOOP' || err.code === 'EMLINK')
-      ) {
-        throw new ToolError(
-          'PERMISSION_DENIED',
-          `Refusing to write through a symbolic link: ${filePath}`,
-          {cause: err},
-        );
-      }
       this.logger(err);
-      throw new ToolError('IO_ERROR', 'Could not save file', {cause: err});
+      throw new Error('Could not save file', {cause: err});
     }
   }
 
-  getWaitForHelper(page: Page) {
-    return WaitForHelper.create(page, this.sessionProvider);
+  storeTraceRecording(result: TraceResult): void {
+    this.#traceResults.push(result);
+  }
+
+  recordedTraces(): TraceResult[] {
+    return this.#traceResults;
+  }
+
+  getWaitForHelper(
+    page: Page,
+    cpuMultiplier: number,
+    networkMultiplier: number,
+  ) {
+    return WaitForHelper.create(
+      page,
+      this.sessionProvider,
+      cpuMultiplier,
+      networkMultiplier,
+    );
   }
 
   async waitForEventsAfterAction(
     action: () => Promise<unknown>,
   ): Promise<void> {
     const page = this.getSelectedPage();
-    const waitForHelper = await this.getWaitForHelper(page);
+    const cpuMultiplier = this.getCpuThrottlingRate();
+    const networkMultiplier = getNetworkMultiplierFromString(
+      this.getNetworkConditions(),
+    );
+    const waitForHelper = await this.getWaitForHelper(
+      page,
+      cpuMultiplier,
+      networkMultiplier,
+    );
     return waitForHelper.waitForEventsAfterAction(action);
   }
 
@@ -674,42 +644,15 @@ export class McpContext implements Context {
   /**
    * Cache traffic summary for a WebSocket connection.
    */
-  cacheTrafficSummary(
-    wsid: number,
-    version: number,
-    summary: TrafficSummary,
-  ): void {
-    const page = this.getSelectedPage();
-    let cache = this.#trafficSummaryCache.get(page);
-    if (!cache) {
-      cache = new Map();
-      this.#trafficSummaryCache.set(page, cache);
-    }
-    cache.delete(wsid);
-    cache.set(wsid, {version, summary});
-    while (cache.size > MAX_TRAFFIC_SUMMARY_CACHE_ENTRIES) {
-      const oldestWsid = cache.keys().next().value;
-      if (oldestWsid === undefined) {
-        break;
-      }
-      cache.delete(oldestWsid);
-    }
+  cacheTrafficSummary(wsid: number, summary: TrafficSummary): void {
+    this.#trafficSummaryCache.set(wsid, summary);
   }
 
   /**
    * Get cached traffic summary for a WebSocket connection.
    */
-  getCachedTrafficSummary(
-    wsid: number,
-    version: number,
-  ): TrafficSummary | undefined {
-    const cache = this.#trafficSummaryCache.get(this.getSelectedPage());
-    const entry = cache?.get(wsid);
-    if (entry?.version !== version) {
-      cache?.delete(wsid);
-      return undefined;
-    }
-    return entry.summary;
+  getCachedTrafficSummary(wsid: number): TrafficSummary | undefined {
+    return this.#trafficSummaryCache.get(wsid);
   }
 
   async waitForTextOnPage({

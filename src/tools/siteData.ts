@@ -4,9 +4,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {zod} from '../third_party/index.js';
-import {ToolError} from '../ToolError.js';
-
 import {ToolCategory} from './categories.js';
 import {defineTool} from './ToolDefinition.js';
 
@@ -41,41 +38,17 @@ function formatCookieScope(cookie: {
 
 export const clearSiteData = defineTool({
   name: 'clear_site_data',
-  description: `Irreversibly clear browser state after confirm=true to create a clean replay environment for the selected page. Use this before replaying login, session creation, storage initialization, or other state-dependent flows; do not use it to inspect cookies or determine which response set one. For cookie provenance, including HttpOnly, Secure, and SameSite attributes, use list_network_requests with cookieName first. Cleanup covers cookies affecting the selected page's HTTP(S) frames—including HttpOnly and Secure cookies through the browser context—persistent storage for those frame origins, and each HTTP(S) frame's sessionStorage. It does not reload the page. The browser HTTP cache is global and is preserved by default; set clearBrowserCache=true only when that wider cross-page effect is explicitly intended.`,
+  description: `Clear browser state to create a clean replay environment for the currently selected page. This clears cookies that affect the current page's HTTP(S) frame URLs, clears browser HTTP cache, clears persistent storage for the current page's HTTP(S) frame origins, and clears sessionStorage in current page HTTP(S) frames. This tool does not reload the page. Cookie cleanup is scoped by cookie domain/path matching for the current page frames, not by all cookies in the browser context.`,
   annotations: {
-    title: 'Clear Site Data',
     category: ToolCategory.BROWSER_STATE,
     readOnlyHint: false,
-    destructiveHint: true,
-    idempotentHint: true,
   },
-  schema: {
-    confirm: zod
-      .boolean()
-      .default(false)
-      .describe(
-        "Must be true to irreversibly delete cookies affecting the selected page's HTTP(S) frames, persistent storage for those frame origins, and HTTP(S) frame sessionStorage. This confirms state reset for replay, not inspection.",
-      ),
-    clearBrowserCache: zod
-      .boolean()
-      .optional()
-      .default(false)
-      .describe(
-        'Also clear the browser-wide HTTP cache. Leave false for site-scoped replay cleanup. Setting true has a wider global effect on every page and origin in this browser, not only the selected page or its frame origins.',
-      ),
-  },
-  handler: async (request, response, context) => {
-    if (!request.params.confirm) {
-      throw new ToolError(
-        'CONFIRMATION_REQUIRED',
-        'clear_site_data requires confirm=true because cookies and site storage cannot be restored.',
-      );
-    }
+  schema: {},
+  handler: async (_request, response, context) => {
     const debugger_ = context.debuggerContext;
     if (debugger_.isEnabled() && debugger_.isPaused()) {
-      throw new ToolError(
-        'PRECONDITION_FAILED',
-        'Execution is paused at a breakpoint. clear_site_data needs page JavaScript to clear sessionStorage, which cannot complete while execution is paused. Resume with pause_or_resume(action="resume"), then retry clear_site_data.',
+      throw new Error(
+        'Execution is paused at a breakpoint. clear_site_data needs page JavaScript to clear sessionStorage, which cannot complete while execution is paused. Resume execution with pause_or_resume, then retry clear_site_data.',
       );
     }
 
@@ -84,8 +57,7 @@ export const clearSiteData = defineTool({
     const url = new URL(pageUrl);
 
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      throw new ToolError(
-        'PRECONDITION_FAILED',
+      throw new Error(
         `clear_site_data requires an http(s) selected page. Current URL is ${pageUrl}. Navigate to the target site first.`,
       );
     }
@@ -110,7 +82,7 @@ export const clearSiteData = defineTool({
     let cookieDomains: string[] = [];
     let cookieNames: string[] = [];
     let cookiesStatus = 'failed';
-    let browserCacheStatus = 'no (not requested; browser-wide cache preserved)';
+    let browserCacheStatus = 'failed';
     let originStorageStatus = `failed`;
     let sessionStorageStatus = 'failed';
     const clearedStorageOrigins: string[] = [];
@@ -175,16 +147,13 @@ export const clearSiteData = defineTool({
     });
 
     if (session) {
-      if (request.params.clearBrowserCache) {
-        try {
-          await session.send('Network.clearBrowserCache');
-          browserCacheStatus = 'yes (browser-wide)';
-        } catch (error) {
-          browserCacheStatus = 'failed';
-          warnings.push(
-            `Failed to clear browser HTTP cache: ${error instanceof Error ? error.message : String(error)}`,
-          );
-        }
+      try {
+        await session.send('Network.clearBrowserCache');
+        browserCacheStatus = 'yes';
+      } catch (error) {
+        warnings.push(
+          `Failed to clear browser HTTP cache: ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
 
       try {
@@ -301,17 +270,5 @@ export const clearSiteData = defineTool({
     response.appendResponseLine(
       'The page was not reloaded. Use navigate_page({type:"reload"}) to replay cookie generation.',
     );
-    response.setStructuredContent({
-      origin: url.origin,
-      url: pageUrl,
-      cookieScopesCleared: clearedCookieScopes.length,
-      cookieScopesFailed: failedCookieScopes.length,
-      browserCacheCleared: browserCacheStatus.startsWith('yes'),
-      storageOriginsCleared: clearedStorageOrigins,
-      storageOriginsFailed: failedStorageOrigins,
-      sessionStorageFramesCleared: clearedSessionStorageFrames,
-      sessionStorageFramesFailed: failedSessionStorageFrames,
-      warnings,
-    });
   },
 });

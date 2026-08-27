@@ -11,11 +11,6 @@ import type {
   Page,
 } from './third_party/index.js';
 
-interface PendingSession {
-  invalidated: boolean;
-  promise: Promise<CDPSession>;
-}
-
 /**
  * CDP Session cache layer for Playwright/Patchright.
  *
@@ -26,8 +21,6 @@ interface PendingSession {
 export class CdpSessionProvider {
   #pageSessions = new WeakMap<Page, CDPSession>();
   #frameSessions = new WeakMap<Frame, CDPSession>();
-  #pendingPageSessions = new WeakMap<Page, PendingSession>();
-  #pendingFrameSessions = new WeakMap<Frame, PendingSession>();
   #context: BrowserContext;
 
   constructor(context: BrowserContext) {
@@ -37,9 +30,9 @@ export class CdpSessionProvider {
   /**
    * Get a cached CDP session for a page, creating one if needed.
    */
-  getSession(pageOrFrame: Page): Promise<CDPSession>;
-  getSession(pageOrFrame: Frame): Promise<CDPSession>;
-  getSession(pageOrFrame: Page | Frame): Promise<CDPSession> {
+  async getSession(pageOrFrame: Page): Promise<CDPSession>;
+  async getSession(pageOrFrame: Frame): Promise<CDPSession>;
+  async getSession(pageOrFrame: Page | Frame): Promise<CDPSession> {
     // Check if it's a Page (has context() method that returns BrowserContext)
     if ('context' in pageOrFrame && typeof pageOrFrame.context === 'function') {
       // It could be either Page or Frame - check for mainFrame to distinguish
@@ -50,73 +43,25 @@ export class CdpSessionProvider {
     return this.#getFrameSession(pageOrFrame as Frame);
   }
 
-  #getPageSession(page: Page): Promise<CDPSession> {
+  async #getPageSession(page: Page): Promise<CDPSession> {
     const cached = this.#pageSessions.get(page);
     if (cached) {
-      return Promise.resolve(cached);
+      return cached;
     }
-    const existing = this.#pendingPageSessions.get(page);
-    if (existing) {
-      return existing.promise;
-    }
-
-    const operation = this.#context.newCDPSession(page);
-    const pending: PendingSession = {invalidated: false, promise: operation};
-    const promise = operation
-      .then(async session => {
-        if (
-          pending.invalidated ||
-          this.#pendingPageSessions.get(page) !== pending
-        ) {
-          await session.detach().catch(() => undefined);
-          throw new Error('CDP page session creation was invalidated');
-        }
-        this.#pageSessions.set(page, session);
-        return session;
-      })
-      .finally(() => {
-        if (this.#pendingPageSessions.get(page) === pending) {
-          this.#pendingPageSessions.delete(page);
-        }
-      });
-    pending.promise = promise;
-    this.#pendingPageSessions.set(page, pending);
-    return promise;
+    const session = await this.#context.newCDPSession(page);
+    this.#pageSessions.set(page, session);
+    return session;
   }
 
-  #getFrameSession(frame: Frame): Promise<CDPSession> {
+  async #getFrameSession(frame: Frame): Promise<CDPSession> {
     const cached = this.#frameSessions.get(frame);
     if (cached) {
-      return Promise.resolve(cached);
+      return cached;
     }
-    const existing = this.#pendingFrameSessions.get(frame);
-    if (existing) {
-      return existing.promise;
-    }
-
-    // Playwright's newCDPSession accepts Frame directly for OOPIFs.
-    const operation = this.#context.newCDPSession(frame);
-    const pending: PendingSession = {invalidated: false, promise: operation};
-    const promise = operation
-      .then(async session => {
-        if (
-          pending.invalidated ||
-          this.#pendingFrameSessions.get(frame) !== pending
-        ) {
-          await session.detach().catch(() => undefined);
-          throw new Error('CDP frame session creation was invalidated');
-        }
-        this.#frameSessions.set(frame, session);
-        return session;
-      })
-      .finally(() => {
-        if (this.#pendingFrameSessions.get(frame) === pending) {
-          this.#pendingFrameSessions.delete(frame);
-        }
-      });
-    pending.promise = promise;
-    this.#pendingFrameSessions.set(frame, pending);
-    return promise;
+    // Playwright's newCDPSession accepts Frame directly for OOPIFs
+    const session = await this.#context.newCDPSession(frame);
+    this.#frameSessions.set(frame, session);
+    return session;
   }
 
   /**
@@ -125,22 +70,12 @@ export class CdpSessionProvider {
    */
   invalidate(pageOrFrame: Page | Frame): void {
     if ('mainFrame' in pageOrFrame) {
-      const pending = this.#pendingPageSessions.get(pageOrFrame as Page);
-      if (pending) {
-        pending.invalidated = true;
-        this.#pendingPageSessions.delete(pageOrFrame as Page);
-      }
       const session = this.#pageSessions.get(pageOrFrame as Page);
       if (session) {
         void session.detach().catch(() => undefined);
         this.#pageSessions.delete(pageOrFrame as Page);
       }
     } else {
-      const pending = this.#pendingFrameSessions.get(pageOrFrame as Frame);
-      if (pending) {
-        pending.invalidated = true;
-        this.#pendingFrameSessions.delete(pageOrFrame as Frame);
-      }
       const session = this.#frameSessions.get(pageOrFrame as Frame);
       if (session) {
         void session.detach().catch(() => undefined);

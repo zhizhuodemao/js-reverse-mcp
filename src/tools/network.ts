@@ -9,14 +9,9 @@ import {
   exportNetworkRequestPart,
 } from '../formatters/networkFormatter.js';
 import {zod} from '../third_party/index.js';
-import {ToolError} from '../ToolError.js';
 
 import {ToolCategory} from './categories.js';
-import {
-  createToolOutputSchema,
-  defineTool,
-  PAGINATION_OUTPUT_SCHEMA,
-} from './ToolDefinition.js';
+import {defineTool} from './ToolDefinition.js';
 
 // Resource types as string literals (Playwright returns string from resourceType())
 const FILTERABLE_RESOURCE_TYPES = [
@@ -62,28 +57,21 @@ const NETWORK_EXPORT_PARTS = [
 
 export const listNetworkRequests = defineTool({
   name: 'list_network_requests',
-  description: `Inspect captured HTTP(S) traffic for the currently selected page. Use this for API calls, request or response headers and bodies, redirects, authentication/session flows, replay or signing inputs, and determining which response created, refreshed, rotated, overwritten, or deleted a cookie. Without reqid it lists and filters requests; with cookieName it traces exact response Set-Cookie updates oldest-first, including cookies with HttpOnly, Secure, or SameSite attributes that page JavaScript cannot fully inspect; with reqid it returns bounded request details; with reqid plus outputFile it exports exact data. To inspect complete Set-Cookie values and attributes, export outputPart="responseHeaders" for a reqid returned by cookieName mode. cookieName never searches outbound Cookie request headers. Use get_websocket_messages for WebSocket frame payloads; this tool only represents the HTTP upgrade request. Capture begins when this MCP attaches and is not retroactive, so reload or reproduce traffic that occurred earlier. Captures then survive navigation in a 5000-request FIFO queue. List and cookie-flow modes default to 20 items per page; filters combine with AND and multiple values inside one filter combine with OR.`,
+  description: `List network requests for the currently selected page. Requests are held in a flat FIFO queue that is not cleared on navigation, so a request that already fired (e.g. a login POST that caused a redirect, or a pre-redirect beacon) stays inspectable after the page moves on; the queue keeps the most recent 5000 requests and the oldest roll off. To establish a clean baseline before the action you want to study (the DevTools "clear, then act" workflow), call clear_network_requests first. Without cookieName, results are sorted newest-first and include request start time plus duration; by default returns the 20 most recent requests, and pageSize/pageIdx paginate. Narrow the normal list with filters: methods (HTTP verb, e.g. ["POST"] to find form/credential/signature submissions), resourceTypes (resource category such as xhr/fetch/document — NOT the HTTP verb), and urlFilter (URL substring). Filters combine with AND; multiple values within one filter combine with OR. With cookieName, this tool switches to Set-Cookie flow mode for that exact response cookie name: it returns every currently captured response that set/updated the cookie, oldest-first, from the first captured Set-Cookie update through the latest captured update. Set-Cookie flow ignores pageSize/pageIdx and is not capped by the default pageSize; when using cookieName, omit pageSize/pageIdx. Each flow entry shows the request id/status/method/URL and the target cookie name=value; values up to 512 chars are shown inline, longer values show only their length. Request Cookie headers are not part of this flow view; pass reqid to inspect one request, or use outputFile with outputPart="all" when exact raw headers are needed. Normal list output is an index: it shows status, summarized long URLs, and Set-Cookie names, not header/body contents. Pass reqid to inspect one request with timing, bounded inline headers where sensitive values such as Cookie, Authorization, and token-like headers are redacted, content-type-aware body previews, and a dedicated Set-Cookie section that shows cookie name=value pairs: values up to 512 chars are shown inline, longer values show only their length. When exact bytes, full bodies, replay inputs, signature inputs, large request bodies, long GET query payloads, binary responses, full headers, full Set-Cookie values, or data for external decoding are needed, pass reqid with outputFile to export the selected data. For GET requests, payload-like data means parsed URL query parameters.`,
   annotations: {
-    title: 'Inspect Network Requests',
     category: ToolCategory.NETWORK,
     // Not read-only due to outputFile export support.
     readOnlyHint: false,
   },
-  capabilities: ['network', 'devtools-ui'],
-  outputSchema: createToolOutputSchema({
-    requests: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
-    cookieFlow: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
-    request: zod.record(zod.string(), zod.unknown()).optional(),
-    export: zod.record(zod.string(), zod.unknown()).optional(),
-    reqid: zod.number().optional(),
-    pagination: PAGINATION_OUTPUT_SCHEMA.optional(),
-  }),
   schema: {
     reqid: zod
-      .number()
+      .preprocess(
+        value => (value === 0 ? undefined : value),
+        zod.number().int().positive().optional(),
+      )
       .optional()
       .describe(
-        'Inspect one captured request by the reqid returned by request-list or cookie-flow mode. Omit it to list/filter requests or trace cookie setters. Add outputFile when exact, complete, or large data is needed.',
+        'The reqid of a specific network request to get full details for. If omitted, lists all requests.',
       ),
     pageSize: zod
       .number()
@@ -91,7 +79,7 @@ export const listNetworkRequests = defineTool({
       .positive()
       .optional()
       .describe(
-        'Maximum requests or Set-Cookie updates per page in list or cookie-flow mode. Defaults to 20.',
+        'Maximum number of requests to return for the normal network list. Defaults to 20. Ignored when cookieName is provided because Set-Cookie flow returns all matching captured updates.',
       ),
     pageIdx: zod
       .number()
@@ -99,7 +87,7 @@ export const listNetworkRequests = defineTool({
       .min(0)
       .optional()
       .describe(
-        'Zero-based page to return in request-list or cookie-flow mode. Omit it for the first page.',
+        'Page number to return for the normal network list (0-based). When omitted, returns the first page. Ignored when cookieName is provided because Set-Cookie flow returns all matching captured updates.',
       ),
     methods: zod
       .array(zod.enum(HTTP_METHODS))
@@ -117,41 +105,37 @@ export const listNetworkRequests = defineTool({
       .string()
       .optional()
       .describe(
-        'Filter request-list results to URLs containing this substring. Use an endpoint path, host, query fragment, or other known URL text; combine with methods/resourceTypes to narrow an API flow.',
+        'Filter requests by URL. Only requests containing this substring will be returned.',
       ),
     cookieName: zod
-      .string()
-      .trim()
-      .min(1)
+      .preprocess(
+        value =>
+          typeof value === 'string' && value.trim() === '' ? undefined : value,
+        zod.string().trim().min(1).optional(),
+      )
       .optional()
       .describe(
-        'Trace an exact cookie name in response Set-Cookie headers. Use this when asked where, when, or by which response a cookie was created, refreshed, rotated, overwritten, or deleted, including HttpOnly cookies and cookies carrying Secure or SameSite attributes. Matching setter responses are returned oldest-first with reqids and use pageSize/pageIdx. Export outputPart="responseHeaders" for a returned reqid to inspect the complete value and Path, Domain, HttpOnly, Secure, SameSite, Expires, or Max-Age attributes. This mode does not search outbound Cookie request headers.',
+        'Switch to Set-Cookie flow mode for an exact response cookie name. Returns all currently captured responses that set/update this cookie, oldest-first, and shows the target cookie name=value for each update. Do not pass pageSize/pageIdx with cookieName; Set-Cookie flow ignores pagination and returns all matching captured updates. Does not match request Cookie headers.',
       ),
     outputFile: zod
       .string()
       .optional()
       .describe(
-        'With reqid, save selected network data to a local file. Use export instead of bounded inline details for complete Set-Cookie headers, exact bytes, large or binary bodies, long query payloads, replay/signature inputs, or external decoding. Absolute paths and paths relative to the current working directory are supported. The response reports the resolved absolute path; use it with evaluate_script localFilePath for browser-side processing. Subject to --allowedRoots when configured.',
-      ),
-    confirmOverwrite: zod
-      .boolean()
-      .default(false)
-      .describe(
-        'Must be true when outputFile already exists. New files do not require confirmation.',
+        'When reqid is provided, save network data to this local file instead of returning only inline text. Use this for exact bytes, large bodies, long GET query payloads, binary responses, replay/signature inputs, or data that will be decoded with external tools. Absolute paths and paths relative to the current working directory are supported. The response reports the resolved absolute path; use that path with evaluate_script localFilePath when browser-side processing is needed.',
       ),
     outputPart: zod
       .enum(NETWORK_EXPORT_PARTS)
       .default('all')
       .describe(
-        'Select what outputFile receives for the chosen reqid. Use "responseHeaders" for complete cookie attributes and repeated Set-Cookie headers, "responseBody" for raw response bytes, "requestBody" for captured request bytes, "queryParams" for parsed URL parameters, or "all" for a JSON bundle of metadata, headers, query parameters, and body content/metadata. Defaults to "all".',
+        'Which part to export when outputFile is provided. "responseHeaders" saves response headers as JSON while preserving repeated headers such as Set-Cookie, "responseBody" saves raw response bytes, "requestBody" saves captured request body bytes, "queryParams" saves parsed URL query parameters as JSON, and "all" saves a JSON bundle with metadata, headers, query params, and body content/metadata. Defaults to "all".',
       ),
   },
   handler: async (request, response, context) => {
     if (request.params.outputFile && request.params.reqid === undefined) {
-      throw new ToolError(
-        'INVALID_ARGUMENT',
+      response.appendResponseLine(
         'outputFile requires reqid. First call list_network_requests without outputFile to find the request id, then re-run with reqid and outputFile.',
       );
+      return;
     }
 
     if (request.params.reqid !== undefined) {
@@ -167,19 +151,10 @@ export const listNetworkRequests = defineTool({
         const file = await context.saveFile(
           exported.data,
           request.params.outputFile,
-          {confirmOverwrite: request.params.confirmOverwrite},
         );
         response.appendResponseLine(
           `${exported.summary} Saved ${outputPart} to ${file.filename}.`,
         );
-        response.setStructuredContent({
-          reqid: request.params.reqid,
-          export: {
-            outputPart,
-            filename: file.filename,
-            byteLength: exported.data.length,
-          },
-        });
         return;
       }
 
@@ -204,29 +179,13 @@ export const listNetworkRequests = defineTool({
 
 export const clearNetworkRequests = defineTool({
   name: 'clear_network_requests',
-  description: `Discard captured HTTP(S) evidence for the currently selected page after confirm=true. Use this immediately before reproducing an action when a clean network capture window is needed; do not use it to reset login, cookies, cache, or other browser state. It irreversibly clears the in-memory request queue, cached response bodies, and initiator maps only. Browser cookies, HTTP cache, origin storage, console messages, and WebSocket connections/messages are unchanged; use clear_site_data for cookie and storage reset. New captures continue above the previous reqid high-water mark because reqids are never reused.`,
+  description: `Clear all collected network requests for the currently selected page, to establish a clean baseline before the action you want to study (the DevTools "clear, then act" workflow). This drops the in-memory request queue, releases the cached response-body byte budget, and clears the request initiator (call stack) maps for the page. It does not touch the browser, cookies, HTTP cache, storage, console, WebSocket messages, or any other page — use clear_site_data for browser state. reqids are not reused after clearing; newly collected requests continue from the previous high-water mark.`,
   annotations: {
-    title: 'Clear Network Requests',
     category: ToolCategory.NETWORK,
     readOnlyHint: false,
-    destructiveHint: true,
-    idempotentHint: true,
   },
-  schema: {
-    confirm: zod
-      .boolean()
-      .default(false)
-      .describe(
-        "Must be true to irreversibly delete the selected page's captured request history, response-body cache, and initiator evidence. This confirms capture cleanup, not browser-state cleanup.",
-      ),
-  },
-  handler: async (request, response, context) => {
-    if (!request.params.confirm) {
-      throw new ToolError(
-        'CONFIRMATION_REQUIRED',
-        'clear_network_requests requires confirm=true because the captured request history cannot be restored.',
-      );
-    }
+  schema: {},
+  handler: async (_request, response, context) => {
     const {requestCount, reclaimedBytes} = context.clearNetworkRequests();
     response.appendResponseLine(
       `Cleared ${requestCount} network request${
@@ -240,6 +199,5 @@ export const clearNetworkRequests = defineTool({
     response.appendResponseLine(
       'reqids are not reused — newly collected requests continue from the previous high-water mark.',
     );
-    response.setStructuredContent({requestCount, reclaimedBytes});
   },
 });

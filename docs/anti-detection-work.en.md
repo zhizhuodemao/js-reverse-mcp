@@ -18,7 +18,7 @@ Anti-detection in js-reverse-mcp is **cleanly layered**. The wrapper layer (this
 │  • Provides Closed Shadow Root access                      │
 ├────────────────────────────────────────────────────────────┤
 │ Source layer: CloakBrowser binary (only with --cloak)      │
-│  • Platform C++ patches: navigator.webdriver / canvas / WebGL /│
+│  • 49 C++ patches: navigator.webdriver / canvas / WebGL /  │
 │    audio / fonts / GPU / screen / WebRTC / TLS             │
 │  • Fingerprint derived from a seed, persisted per profile  │
 └────────────────────────────────────────────────────────────┘
@@ -35,9 +35,9 @@ Anti-detection in js-reverse-mcp is **cleanly layered**. The wrapper layer (this
 
 | Dimension                        | Default mode                                  | `--cloak` mode                                                     |
 | -------------------------------- | --------------------------------------------- | ------------------------------------------------------------------ |
-| Browser binary                   | System Google Chrome                          | CloakBrowser custom Chromium for the current platform              |
+| Browser binary                   | System Google Chrome                          | CloakBrowser custom Chromium (based on 145)                        |
 | Protocol-layer stealth           | Patchright                                    | Patchright                                                         |
-| Source-layer fingerprint patches | None                                          | Platform-specific C++ patches                                      |
+| Source-layer fingerprint patches | None                                          | 49 C++ patches                                                     |
 | Profile directory                | `~/.cache/chrome-devtools-mcp/chrome-profile` | `~/.cache/chrome-devtools-mcp/cloak-profile` (physically isolated) |
 | Chrome Web Store / Google sync   | ✅                                            | ❌ (Chromium has no Google closed-source services)                 |
 | Anti-bot bypass rate             | Medium                                        | High (passes 30+ detection sites in CloakBrowser's tests)          |
@@ -170,5 +170,5 @@ list_network_requests()
 ## Further Reading
 
 - Full `--cloak` guide, profile/fingerprint identity binding, dual-MCP setup: [cloak.en.md](cloak.en.md)
-- CloakBrowser project (source-level patches explained): https://github.com/CloakHQ/CloakBrowser
+- CloakBrowser project (49 C++ patches explained): https://github.com/CloakHQ/CloakBrowser
 - How Patchright's protocol-layer stealth works: https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs

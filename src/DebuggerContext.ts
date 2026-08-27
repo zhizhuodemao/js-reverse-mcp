@@ -90,7 +90,6 @@ export interface RemoteObject {
   subtype?: string;
   className?: string;
   value?: unknown;
-  unserializableValue?: string;
   description?: string;
   objectId?: string;
 }
@@ -112,7 +111,6 @@ export interface ScopeVariable {
 
 export interface EvaluateResult {
   result: RemoteObject;
-  settledPromise?: boolean;
   exceptionDetails?: {
     text: string;
     exception?: RemoteObject;
@@ -140,10 +138,6 @@ export class DebuggerContext {
       return;
     }
 
-    if (this.#client) {
-      await this.disable({preserveBreakpoints: true});
-    }
-
     this.#client = client;
     this.#scripts.clear();
     this.#urlToScripts.clear();
@@ -155,70 +149,44 @@ export class DebuggerContext {
     addCdpEventListener(client, 'Debugger.paused', this.#onPaused);
     addCdpEventListener(client, 'Debugger.resumed', this.#onResumed);
 
-    try {
-      // Enable after listeners are attached because Chrome emits the existing
-      // scripts as part of Debugger.enable.
-      await client.send('Debugger.enable');
-      this.#enabled = true;
+    // Enable the debugger domain
+    await client.send('Debugger.enable');
 
-      // Set async call stack depth for better stack traces.
-      try {
-        await client.send('Debugger.setAsyncCallStackDepth', {maxDepth: 32});
-      } catch {
-        // Ignore errors - some older versions may not support this.
-      }
-    } catch (error) {
-      // A failed enable must be indistinguishable from one that never started:
-      // leave no listeners/client behind so the next capability request can
-      // retry safely.
-      removeCdpEventListener(
-        client,
-        'Debugger.scriptParsed',
-        this.#onScriptParsed,
-      );
-      removeCdpEventListener(client, 'Debugger.paused', this.#onPaused);
-      removeCdpEventListener(client, 'Debugger.resumed', this.#onResumed);
-      try {
-        await client.send('Debugger.disable');
-      } catch {
-        // Best-effort rollback for a partially enabled CDP domain.
-      }
-      this.#scripts.clear();
-      this.#urlToScripts.clear();
-      this.#pausedState = {isPaused: false, callFrames: []};
-      this.#enabled = false;
-      this.#client = null;
-      throw error;
+    // Set async call stack depth for better stack traces
+    try {
+      await client.send('Debugger.setAsyncCallStackDepth', {maxDepth: 32});
+    } catch {
+      // Ignore errors - some older versions may not support this
     }
+
+    this.#enabled = true;
   }
 
   /**
    * Disable the debugger.
    */
-  async disable(options: {preserveBreakpoints?: boolean} = {}): Promise<void> {
-    const client = this.#client;
-    if (client) {
-      removeCdpEventListener(
-        client,
-        'Debugger.scriptParsed',
-        this.#onScriptParsed,
-      );
-      removeCdpEventListener(client, 'Debugger.paused', this.#onPaused);
-      removeCdpEventListener(client, 'Debugger.resumed', this.#onResumed);
+  async disable(): Promise<void> {
+    if (!this.#enabled || !this.#client) {
+      return;
+    }
 
-      try {
-        await client.send('Debugger.disable');
-      } catch {
-        // Ignore errors during cleanup.
-      }
+    removeCdpEventListener(
+      this.#client,
+      'Debugger.scriptParsed',
+      this.#onScriptParsed,
+    );
+    removeCdpEventListener(this.#client, 'Debugger.paused', this.#onPaused);
+    removeCdpEventListener(this.#client, 'Debugger.resumed', this.#onResumed);
+
+    try {
+      await this.#client.send('Debugger.disable');
+    } catch {
+      // Ignore errors during cleanup
     }
 
     this.#scripts.clear();
     this.#urlToScripts.clear();
-    if (!options.preserveBreakpoints) {
-      this.#breakpoints.clear();
-      this.#xhrBreakpoints.clear();
-    }
+    this.#breakpoints.clear();
     this.#pausedState = {isPaused: false, callFrames: []};
     this.#enabled = false;
     this.#client = null;
@@ -517,192 +485,15 @@ export class DebuggerContext {
       generatePreview: options.generatePreview ?? true,
     });
 
-    return this.#toEvaluateResult(result);
-  }
-
-  /**
-   * Evaluate an async expression while paused without waiting on page progress.
-   * A fulfilled/rejected Promise can be inspected immediately; a pending
-   * Promise cannot settle while the JavaScript thread remains paused.
-   */
-  async evaluateSettledPromiseOnCallFrame(
-    callFrameId: string,
-    expression: string,
-  ): Promise<EvaluateResult> {
-    const evaluated = await this.evaluateOnCallFrame(callFrameId, expression, {
-      returnByValue: false,
-      generatePreview: false,
-    });
-    if (evaluated.exceptionDetails) {
-      return {...evaluated, settledPromise: false};
-    }
-
-    const objectId = evaluated.result.objectId;
-    if (!objectId || evaluated.result.subtype !== 'promise') {
-      return {...evaluated, settledPromise: false};
-    }
-    if (!this.#client) {
-      throw new Error('Debugger not enabled');
-    }
-
-    const properties = await this.#client.send('Runtime.getProperties', {
-      objectId,
-      ownProperties: true,
-    });
-    const internalProperties = properties.internalProperties ?? [];
-    const promiseState = internalProperties.find(
-      property => property.name === '[[PromiseState]]',
-    )?.value?.value;
-    if (promiseState !== 'fulfilled' && promiseState !== 'rejected') {
-      throw new Error(
-        'Paused async evaluation returned a pending Promise. It cannot settle while execution remains paused. Use a synchronous expression that reads the current call frame, or resume execution before evaluating async work.',
-      );
-    }
-
-    // Runtime.awaitPromise waits for the page's JavaScript thread and therefore
-    // deadlocks while Debugger is paused, even when the Promise is already
-    // settled. V8 exposes the settled value as an internal property, which can
-    // be inspected without resuming execution.
-    const promiseResult = internalProperties.find(
-      property => property.name === '[[PromiseResult]]',
-    )?.value;
-    const remoteResult = promiseResult
-      ? this.#fromProtocolRemoteObject(promiseResult)
-      : {type: 'undefined'};
-    if (promiseState === 'rejected') {
-      return {
-        result: remoteResult,
-        settledPromise: true,
-        exceptionDetails: {
-          text: 'Uncaught (in promise)',
-          exception: remoteResult,
-        },
-      };
-    }
-    return {result: remoteResult, settledPromise: true};
-  }
-
-  /**
-   * Convert a settled remote value to ordinary JSON-compatible data without
-   * executing JavaScript in the paused page.
-   */
-  async materializeRemoteObject(remote: RemoteObject): Promise<unknown> {
-    if (!this.#client) {
-      throw new Error('Debugger not enabled');
-    }
-    return await this.#materializeRemoteObject(remote, new Set(), {
-      left: 10_000,
-    });
-  }
-
-  async #materializeRemoteObject(
-    remote: RemoteObject,
-    ancestors: Set<string>,
-    budget: {left: number},
-  ): Promise<unknown> {
-    if (remote.value !== undefined) {
-      return remote.value;
-    }
-    if (remote.type === 'undefined' || remote.type === 'function') {
-      return undefined;
-    }
-    if (remote.subtype === 'null') {
-      return null;
-    }
-    if (remote.unserializableValue) {
-      if (remote.unserializableValue === 'NaN') {
-        return Number.NaN;
-      }
-      if (remote.unserializableValue === 'Infinity') {
-        return Number.POSITIVE_INFINITY;
-      }
-      if (remote.unserializableValue === '-Infinity') {
-        return Number.NEGATIVE_INFINITY;
-      }
-      throw new Error(
-        `Paused result ${remote.unserializableValue} is not JSON-serializable.`,
-      );
-    }
-
-    const objectId = remote.objectId;
-    if (!objectId) {
-      return remote.description;
-    }
-    if (ancestors.has(objectId)) {
-      throw new Error('Paused result contains a circular reference.');
-    }
-    if (budget.left <= 0) {
-      throw new Error('Paused result contains more than 10000 properties.');
-    }
-
-    ancestors.add(objectId);
-    try {
-      const properties = await this.#client!.send('Runtime.getProperties', {
-        objectId,
-        ownProperties: true,
-        accessorPropertiesOnly: false,
-        generatePreview: false,
-      });
-      const output: unknown[] | Record<string, unknown> =
-        remote.subtype === 'array' ? [] : {};
-      for (const property of properties.result) {
-        if (!property.enumerable || !property.value) {
-          continue;
-        }
-        budget.left--;
-        const value = await this.#materializeRemoteObject(
-          this.#fromProtocolRemoteObject(property.value),
-          ancestors,
-          budget,
-        );
-        if (Array.isArray(output) && /^(0|[1-9]\d*)$/.test(property.name)) {
-          const index = Number(property.name);
-          if (index >= 10_000) {
-            throw new Error(
-              'Paused result contains an array index beyond the 10000-item serialization limit.',
-            );
-          }
-          output[index] = value;
-        } else {
-          Object.defineProperty(output, property.name, {
-            value,
-            enumerable: true,
-            configurable: true,
-            writable: true,
-          });
-        }
-      }
-      return output;
-    } finally {
-      ancestors.delete(objectId);
-    }
-  }
-
-  /** Interrupt the currently running Runtime evaluation, if any. */
-  async terminateExecution(): Promise<void> {
-    await this.#client?.send('Runtime.terminateExecution');
-  }
-
-  #toEvaluateResult(result: {
-    result: {
-      type: string;
-      subtype?: string;
-      className?: string;
-      value?: unknown;
-      description?: string;
-      objectId?: string;
-    };
-    exceptionDetails?: {
-      text: string;
-      exception?: {
-        type: string;
-        value?: unknown;
-        description?: string;
-      };
-    };
-  }): EvaluateResult {
     return {
-      result: this.#fromProtocolRemoteObject(result.result),
+      result: {
+        type: result.result.type,
+        subtype: result.result.subtype,
+        className: result.result.className,
+        value: result.result.value,
+        description: result.result.description,
+        objectId: result.result.objectId,
+      },
       exceptionDetails: result.exceptionDetails
         ? {
             text: result.exceptionDetails.text,
@@ -715,26 +506,6 @@ export class DebuggerContext {
               : undefined,
           }
         : undefined,
-    };
-  }
-
-  #fromProtocolRemoteObject(remote: {
-    type: string;
-    subtype?: string;
-    className?: string;
-    value?: unknown;
-    unserializableValue?: string;
-    description?: string;
-    objectId?: string;
-  }): RemoteObject {
-    return {
-      type: remote.type,
-      subtype: remote.subtype,
-      className: remote.className,
-      value: remote.value,
-      unserializableValue: remote.unserializableValue,
-      description: remote.description,
-      objectId: remote.objectId,
     };
   }
 
@@ -873,6 +644,12 @@ export class DebuggerContext {
 
     // Search in each script
     for (const script of this.#scripts.values()) {
+      // Skip scripts without URLs (inline scripts, eval, etc.)
+      // unless they have meaningful content
+      if (!script.url && !script.hash) {
+        continue;
+      }
+
       try {
         const result = await this.#client.send('Debugger.searchInContent', {
           scriptId: script.scriptId,
@@ -916,10 +693,6 @@ export class DebuggerContext {
     if (!this.#client) {
       return;
     }
-
-    // The IDs belong to the previous Debugger session. Replace them with the
-    // IDs returned by the new session instead of retaining stale entries.
-    this.#breakpoints.clear();
 
     for (const bp of breakpoints) {
       try {
@@ -1122,40 +895,28 @@ export class DebuggerContext {
   /**
    * Remove all breakpoints (code breakpoints + XHR breakpoints).
    */
-  async removeAllBreakpoints(): Promise<{
-    removedCode: number;
-    removedXHR: number;
-    failedCode: string[];
-    failedXHR: string[];
-  }> {
+  async removeAllBreakpoints(): Promise<void> {
     if (!this.#client) {
       throw new Error('Debugger not enabled');
     }
 
     const breakpointIds = Array.from(this.#breakpoints.keys());
-    let removedCode = 0;
-    const failedCode: string[] = [];
     for (const breakpointId of breakpointIds) {
       try {
         await this.removeBreakpoint(breakpointId);
-        removedCode++;
       } catch {
-        failedCode.push(breakpointId);
+        // Ignore errors for individual breakpoints
       }
     }
 
     const xhrUrls = Array.from(this.#xhrBreakpoints);
-    let removedXHR = 0;
-    const failedXHR: string[] = [];
     for (const url of xhrUrls) {
       try {
         await this.removeXHRBreakpoint(url);
-        removedXHR++;
       } catch {
-        failedXHR.push(url);
+        // Ignore errors for individual XHR breakpoints
       }
     }
-    return {removedCode, removedXHR, failedCode, failedXHR};
   }
 
   /**
