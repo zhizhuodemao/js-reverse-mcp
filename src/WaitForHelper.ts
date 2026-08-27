@@ -18,11 +18,16 @@ export class WaitForHelper {
   #expectNavigationIn: number;
   #navigationTimeout: number;
 
-  private constructor(page: Page, cdpSession: CDPSession) {
-    this.#stableDomTimeout = 3000;
-    this.#stableDomFor = 100;
-    this.#expectNavigationIn = 100;
-    this.#navigationTimeout = 3000;
+  private constructor(
+    page: Page,
+    cdpSession: CDPSession,
+    cpuTimeoutMultiplier: number,
+    networkTimeoutMultiplier: number,
+  ) {
+    this.#stableDomTimeout = 3000 * cpuTimeoutMultiplier;
+    this.#stableDomFor = 100 * cpuTimeoutMultiplier;
+    this.#expectNavigationIn = 100 * cpuTimeoutMultiplier;
+    this.#navigationTimeout = 3000 * networkTimeoutMultiplier;
     this.#page = page;
     this.#cdpSession = cdpSession;
   }
@@ -30,9 +35,16 @@ export class WaitForHelper {
   static async create(
     page: Page,
     sessionProvider: CdpSessionProvider,
+    cpuTimeoutMultiplier: number,
+    networkTimeoutMultiplier: number,
   ): Promise<WaitForHelper> {
     const session = await sessionProvider.getSession(page);
-    return new WaitForHelper(page, session);
+    return new WaitForHelper(
+      page,
+      session,
+      cpuTimeoutMultiplier,
+      networkTimeoutMultiplier,
+    );
   }
 
   /**
@@ -67,7 +79,7 @@ export class WaitForHelper {
       return domObserver;
     }, this.#stableDomFor);
 
-    const cleanup = async () => {
+    this.#abortController.signal.addEventListener('abort', async () => {
       try {
         await stableDomObserver.evaluate(observer => {
           observer.observer.disconnect();
@@ -77,21 +89,16 @@ export class WaitForHelper {
       } catch {
         // Ignored cleanup errors
       }
-    };
+    });
 
-    try {
-      await Promise.race([
-        stableDomObserver.evaluate(async observer => {
-          return await observer.resolver.promise;
-        }),
-        this.timeout(this.#stableDomTimeout).then(() => {
-          throw new Error('Timeout');
-        }),
-      ]);
-    } finally {
-      // Do not leave the observer/evaluation running after this helper returns.
-      await cleanup();
-    }
+    return Promise.race([
+      stableDomObserver.evaluate(async observer => {
+        return await observer.resolver.promise;
+      }),
+      this.timeout(this.#stableDomTimeout).then(() => {
+        throw new Error('Timeout');
+      }),
+    ]);
   }
 
   async waitForNavigationStarted() {
@@ -145,6 +152,16 @@ export class WaitForHelper {
   async waitForEventsAfterAction(
     action: () => Promise<unknown>,
   ): Promise<void> {
+    // Overall timeout to prevent infinite hanging (15 seconds max)
+    const overallTimeout = new Promise<void>((_, reject) => {
+      const id = setTimeout(() => {
+        reject(new Error('Overall navigation timeout'));
+      }, 15000);
+      this.#abortController.signal.addEventListener('abort', () => {
+        clearTimeout(id);
+      });
+    });
+
     const doAction = async () => {
       const navigationFinished = this.waitForNavigationStarted()
         .then(navigationStarted => {
@@ -179,8 +196,9 @@ export class WaitForHelper {
     };
 
     try {
-      await doAction();
-    } finally {
+      await Promise.race([doAction(), overallTimeout]);
+    } catch (error) {
+      logger(error);
       this.#abortController.abort();
     }
   }

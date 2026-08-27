@@ -1,6 +1,6 @@
 # CloakBrowser 模式（`--cloak`）
 
-`--cloak` 是 js-reverse-mcp 的一个**可选**启动开关，用于调试强反爬站点。它启用 [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) 团队定制、按平台提供源码层指纹 patch 的 Chromium 二进制，与默认的 Patchright 协议层 stealth 叠加，形成**双层反检测**。
+`--cloak` 是 js-reverse-mcp 的一个**可选**启动开关，用于调试强反爬站点。它启用 [CloakBrowser](https://github.com/CloakHQ/CloakBrowser) 团队定制的 Chromium 二进制（含 49 个 C++ 源码层指纹 patch），与默认的 Patchright 协议层 stealth 叠加，形成**双层反检测**。
 
 ## 何时该用 `--cloak`
 
@@ -29,9 +29,27 @@
 }
 ```
 
+如果你本地已经有 CloakBrowser，可同时传 `--cloakBinaryPath`，MCP 会直接使用该二进制，不触发首次自动下载：
+
+```json
+{
+  "mcpServers": {
+    "js-reverse": {
+      "command": "npx",
+      "args": [
+        "js-reverse-mcp",
+        "--cloak",
+        "--cloakBinaryPath",
+        "D:\\develop_software\\CloakBrowser\\chrome.exe"
+      ]
+    }
+  }
+}
+```
+
 ### **强烈推荐：先预下载二进制**
 
-第一次启用 `--cloak` 时，MCP 会**静默下载 ~200MB** 的 CloakBrowser 二进制（缓存到 `~/.cloakbrowser/`，之后启动零延迟）。但在 MCP 协议下这个下载过程**没有进度反馈**，看起来像 MCP 卡住了 30–60 秒。
+未传 `--cloakBinaryPath` 时，第一次启用 `--cloak` 会**静默下载 ~200MB** 的 CloakBrowser 二进制（缓存到 `~/.cloakbrowser/`，之后启动零延迟）。但在 MCP 协议下这个下载过程**没有进度反馈**，看起来像 MCP 卡住了 30–60 秒。
 
 **最佳实践：把这一步从 MCP 上下文里拿出来，单独跑一次**：
 
@@ -53,7 +71,7 @@ npx cloakbrowser install
 │  • 默认在 isolated execution context 里执行 evaluate    │
 │  • 移除 --enable-automation 等可探测的 launch flag      │
 ├────────────────────────────────────────────────────────┤
-│ 源码层：CloakBrowser 二进制（按平台提供 C++ patch）     │
+│ 源码层：CloakBrowser 二进制（49 个 C++ patch）          │
 │  • navigator.webdriver = false（属性存在，匹配真实 Chrome）│
 │  • canvas / WebGL / audio / fonts 源码级 spoofing       │
 │  • GPU 字符串、屏幕尺寸从 fingerprint seed 派生         │
@@ -63,11 +81,69 @@ npx cloakbrowser install
 
 两层都不需要 JS 注入。任何 `Object.defineProperty` 风格的反检测 hack 反而会成为指纹信号 —— 我们彻底避免。
 
-## 平台 profile
+## 平台伪装：在 macOS 上也报 Windows（但 ≠ 完整 Linux/Win 防护）
 
-js-reverse-mcp 直接继承当前 CloakBrowser 的平台默认值：macOS 使用原生 macOS profile，Linux/Windows 使用上游选择的 Windows desktop profile。这样平台、GPU、UA 与对应二进制保持一致；MCP 只替换随机 fingerprint seed，使同一个持久化 profile 在多次启动间保持稳定身份，并移除不适合桌面调试的 `--no-sandbox`。
+**`--cloak` 模式无视真实 OS，统一通过 `--fingerprint-platform=windows` 报 Windows 桌面身份**。但这**不等于**在 macOS 上拿到 Linux/Win build 的完整防护：
 
-CloakBrowser 的二进制版本和 patch 覆盖会随平台、版本变化，因此这里不固定声明 patch 数量。若目标站点在某个平台仍被拦截，应以该站点的实际结果为准，并对比系统 Chrome 默认模式，而不是手工强制另一个 OS profile。
+| 平台 build        | C++ patch 数 |
+| ----------------- | ------------ |
+| Linux x64 / arm64 | **57**       |
+| Windows x64       | **57**       |
+| macOS arm64 / x64 | **26**       |
+
+CloakBrowser 的 macOS build **只编进了 26 个 patch**。在 mac 上跑 `--cloak`，**无论 `--fingerprint-platform` 设成什么**，底层仍然是这个 macOS build 的 26 个 patch。`--fingerprint-platform=windows` 只让**派生出来的指纹字符串**呈现 Windows 风格（UA、`navigator.platform`、GPU 名字），**但 31 个 macOS build 缺失的 patch 不会因此凭空出现**。
+
+**在 macOS 上跑 cloak 强行报 Windows 的限制**：
+
+- ✅ `navigator.userAgent`、`navigator.platform`、`screen.width/height` 全部呈现 Windows 桌面值
+- ✅ WebGL vendor/renderer 派生为 Windows GPU 字符串（如 `Google Inc. (NVIDIA)` + `RTX 3090`）
+- ❌ **WebGL 字符串的细节一致性**（device ID 格式、版本后缀等）可能跟真实 Windows + RTX 3090 输出不严格匹配 —— 主动检测器（如 BrowserScan）能识别出
+- ❌ canvas / audio / 字体的派生值跟 GPU 上下文的内部一致性 —— 也是 26 patches 没完整覆盖的部分
+
+### BrowserScan 实测对比
+
+| 设置                                                      | WebGL vendor / renderer 是否被 BrowserScan 标红 |
+| --------------------------------------------------------- | ----------------------------------------------- |
+| 真实 macOS Chrome（用户自己日常用的）                     | ❌ 不红                                         |
+| basic 模式（系统 Chrome + Patchright）                    | ❌ 不红                                         |
+| **cloak macOS build 配 `--fingerprint-platform=windows`** | 🔴 **红**（被识别为「反指纹技术」）             |
+
+说明 cloak 在 macOS 上即使切到 Windows fingerprint 也无法蒙过主动 WebGL 检测。
+
+### 怎么才能拿到 57 patches 全套
+
+只能跑 **Linux 或 Windows build 的 cloak**：
+
+```bash
+# Docker 跑 Linux build，CDP 暴露到 host
+docker run -d --name cloak \
+  -p 127.0.0.1:9222:9222 \
+  cloakhq/cloakbrowser \
+  cloakserve --headless=false
+```
+
+然后 MCP 用 `--browserUrl http://127.0.0.1:9222` 连过去（这是我们保留 `--browserUrl` 的用场之一）。
+
+**Docker 在 macOS 上的代价**：
+
+- Docker for Mac 默认无 X server → Linux 浏览器跑起来但看不见
+- noVNC 方案：浏览器里看浏览器，调试体验差
+- 真心要看到窗口、且要强反爬 → Linux/Windows 物理机更顺手
+
+### 重要：BrowserScan ≠ 真实生产反爬
+
+BrowserScan 是**主动指纹检测器**演示站，比绝大多数实际反爬严格。Cloudflare Turnstile / FingerprintJS / DataDome 用的是**综合行为评分**，关注点跟 BrowserScan 不一致。
+
+**真实判断标准是「你实际想调试的目标站点能不能进」**：
+
+- 能进 → cloak macOS（26 patches）够用，BrowserScan 多少红条都无所谓
+- 进不去 → 才考虑升级到 Docker Linux cloak
+
+**别以「BrowserScan 全绿」为产品目标**。它是 stress test，不是 reality。
+
+### 如果你想切回 macOS profile 模式
+
+极少数场景需要（如调试明确针对 macOS Safari 的内容），改 `src/cloak.ts:99` 里的 `const platform = 'windows'` 一行即可。
 
 ## 跟默认模式的差异
 
@@ -77,8 +153,8 @@ CloakBrowser 的二进制版本和 patch 覆盖会随平台、版本变化，因
 | Chrome Web Store       | ✅ 有                                         | ❌ 无（Chromium 不含 Google 闭源服务）       |
 | Google sync / 账号集成 | ✅                                            | ❌                                           |
 | 你电脑上已装的扩展     | ✅ 全部可见                                   | ❌ 不可见                                    |
-| Widevine DRM           | ✅                                            | 需自行侧载 Widevine CDM                      |
-| 指纹防护               | 协议层（Patchright）                          | 协议层 + 源码层（按平台提供 C++ patch）      |
+| Widevine DRM           | ✅                                            | ❌（视频站点的加密内容可能播不了）           |
+| 指纹防护               | 协议层（Patchright）                          | 协议层 + 源码层（49 个 C++ patch）           |
 | 启动速度               | 快                                            | 首次下载 ~30-60s，之后正常                   |
 | 反爬通过率             | 中等                                          | 高（30+ 检测站测试通过）                     |
 | 持久化 profile 路径    | `~/.cache/chrome-devtools-mcp/chrome-profile` | `~/.cache/chrome-devtools-mcp/cloak-profile` |

@@ -7,13 +7,13 @@
 import {zod} from '../third_party/index.js';
 
 import {ToolCategory} from './categories.js';
+import {boolParam} from './paramHelpers.js';
 import {defineTool} from './ToolDefinition.js';
 
 export const screenshot = defineTool({
   name: 'take_screenshot',
-  description: `Captures the visual state of the currently selected page. Use it to verify page layout, visible UI state, selector targets, in-page dialogs/modals, or the effect of a navigation/click; it is not a substitute for DOM values, network evidence, or script inspection. By default it returns the visible viewport, while fullPage=true captures the whole document; oversized captures may be saved as a temporary artifact instead of attached. Pass filePath for a reusable local artifact; existing files require confirmOverwrite=true and remain subject to --allowedRoots.`,
+  description: `Take a screenshot of the currently selected page. By default captures the visible viewport; set fullPage=true to capture the full page.`,
   annotations: {
-    title: 'Take Screenshot',
     category: ToolCategory.DEBUGGING,
     // Not read-only due to filePath param.
     readOnlyHint: false,
@@ -22,9 +22,7 @@ export const screenshot = defineTool({
     format: zod
       .enum(['png', 'jpeg'])
       .default('png')
-      .describe(
-        'Image format for the attachment or saved file. Defaults to png; use jpeg when smaller lossy output is preferred.',
-      ),
+      .describe('Type of format to save the screenshot as. Default is "png"'),
     quality: zod
       .number()
       .min(0)
@@ -33,23 +31,16 @@ export const screenshot = defineTool({
       .describe(
         'Compression quality for JPEG format (0-100). Higher values mean better quality but larger file sizes. Ignored for PNG format.',
       ),
-    fullPage: zod
-      .boolean()
+    fullPage: boolParam()
       .optional()
       .describe(
-        'Capture the entire scrollable document when true; leave false or omit it for the currently visible viewport.',
+        'If set to true, captures the full page instead of the currently visible viewport.',
       ),
     filePath: zod
       .string()
       .optional()
       .describe(
-        'Optional absolute or working-directory-relative path for a reusable screenshot artifact. Omit it to attach the image directly. Subject to --allowedRoots when configured.',
-      ),
-    confirmOverwrite: zod
-      .boolean()
-      .default(false)
-      .describe(
-        'Must be true when filePath already exists. New files do not require confirmation.',
+        'The absolute path, or a path relative to the current working directory, to save the screenshot to instead of attaching it to the response.',
       ),
   },
   handler: async (request, response, context) => {
@@ -75,38 +66,18 @@ export const screenshot = defineTool({
     }
 
     if (request.params.filePath) {
-      const file = await context.saveFile(screenshot, request.params.filePath, {
-        confirmOverwrite: request.params.confirmOverwrite,
-      });
+      const file = await context.saveFile(screenshot, request.params.filePath);
       response.appendResponseLine(`Saved screenshot to ${file.filename}.`);
-      response.setStructuredContent({
-        format,
-        fullPage: request.params.fullPage ?? false,
-        byteLength: screenshot.length,
-        filename: file.filename,
-      });
     } else if (screenshot.length >= 2_000_000) {
       const {filename} = await context.saveTemporaryFile(
         screenshot,
         `image/${request.params.format}`,
       );
       response.appendResponseLine(`Saved screenshot to ${filename}.`);
-      response.setStructuredContent({
-        format,
-        fullPage: request.params.fullPage ?? false,
-        byteLength: screenshot.length,
-        filename,
-      });
     } else {
       response.attachImage({
         mimeType: `image/${request.params.format}`,
         data: Buffer.from(screenshot).toString('base64'),
-      });
-      response.setStructuredContent({
-        format,
-        fullPage: request.params.fullPage ?? false,
-        byteLength: screenshot.length,
-        attached: true,
       });
     }
   },

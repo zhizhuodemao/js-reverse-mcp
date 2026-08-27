@@ -12,55 +12,32 @@ import {
   formatWebSocketFrameDetail,
 } from '../formatters/websocketFormatter.js';
 import {zod} from '../third_party/index.js';
-import {ToolError} from '../ToolError.js';
-import {paginate} from '../utils/pagination.js';
 
 import {ToolCategory} from './categories.js';
-import {
-  createToolOutputSchema,
-  defineTool,
-  PAGINATION_OUTPUT_SCHEMA,
-} from './ToolDefinition.js';
+import {boolParam} from './paramHelpers.js';
+import {defineTool} from './ToolDefinition.js';
 
 const DIRECTION_OPTIONS: readonly ['sent', 'received'] = ['sent', 'received'];
 
 export const getWebSocketMessages = defineTool({
   name: 'get_websocket_messages',
-  description: `Inspect captured bidirectional WebSocket connections and frame payloads for the selected page. Use this for WebSocket, socket, live-update, push, streaming, or realtime message flows; use list_network_requests for ordinary HTTP/XHR/fetch traffic and WebSocket upgrade request headers. WebSocket capture starts lazily on this tool's first use and is not retroactive: if the relevant socket already connected or exchanged frames, call this tool once to initialize capture, then reload or reproduce the flow. Without wsid it lists connections so you can choose one. With wsid it lists paginated sent/received frames; add show_content=true for payload previews. With wsid and analyze=true it groups frames by payload pattern and returns group IDs and sample frame indices; then use groupId to inspect one pattern. With wsid and frameIndex it returns one retained frame's detailed payload using the stable index shown in frame tables or analysis samples.`,
+  description: `Lists WebSocket connections or gets messages for a specific connection. Without wsid, lists all connections. With wsid, gets messages. Set analyze=true to group messages by pattern. Use groupId to filter by group. Use frameIndex to get a single message's full detail by the raw frame index shown in message tables and analysis samples.`,
   annotations: {
-    title: 'Inspect WebSocket Messages',
     category: ToolCategory.NETWORK,
     readOnlyHint: true,
   },
-  capabilities: ['websocket'],
-  outputSchema: createToolOutputSchema({
-    connections: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
-    frames: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
-    frame: zod.record(zod.string(), zod.unknown()).optional(),
-    groups: zod.array(zod.record(zod.string(), zod.unknown())).optional(),
-    frameIndices: zod.array(zod.number().int()).optional(),
-    wsid: zod.number().optional(),
-    url: zod.string().optional(),
-    version: zod.number().int().optional(),
-    groupId: zod.string().optional(),
-    totalFrames: zod.number().int().optional(),
-    sentCount: zod.number().int().optional(),
-    receivedCount: zod.number().int().optional(),
-    pagination: PAGINATION_OUTPUT_SCHEMA.optional(),
-  }),
   schema: {
     wsid: zod
       .number()
       .optional()
       .describe(
-        'Select a WebSocket connection by the wsid returned from connection-list mode. Omit it to list captured connections before inspecting their frames.',
+        'The wsid of the WebSocket connection. If omitted, lists all connections.',
       ),
-    analyze: zod
-      .boolean()
+    analyze: boolParam()
       .optional()
       .default(false)
       .describe(
-        'With wsid, group retained frames by payload pattern/fingerprint. Use this to discover message types in noisy realtime traffic; it returns traffic statistics, group IDs, and sample stable frame indices. Follow with groupId or frameIndex for focused inspection.',
+        'Set to true to analyze and group messages by pattern/fingerprint. Returns statistics and sample indices for each message type.',
       ),
     frameIndex: zod
       .number()
@@ -68,19 +45,17 @@ export const getWebSocketMessages = defineTool({
       .min(0)
       .optional()
       .describe(
-        'With wsid, return one retained frame and its payload by stable frame index. This is the Idx shown in frame tables or analyze=true samples, not a page-relative array offset. Indices are monotonic and may begin above 0 after older frames are evicted.',
+        'Get a single message by its raw frame index (0-based). Use the Idx values shown by message tables or the sample indices returned by analyze=true.',
       ),
     direction: zod
       .enum(DIRECTION_OPTIONS)
       .optional()
-      .describe(
-        'With wsid, restrict frame-list, analysis, or group results to frames "sent" by the page or "received" from the server. It does not filter connection-list mode.',
-      ),
+      .describe('Filter by direction: "sent" or "received".'),
     groupId: zod
       .string()
       .optional()
       .describe(
-        'With wsid, list only frames from a pattern group such as A, B, or C. Run analyze=true first to discover group IDs. If analysis used direction, repeat the same direction because grouping is computed over that filtered frame set.',
+        'Filter by group ID (A, B, C, ...). Run with analyze=true first to get group IDs; if analyze used a direction filter, pass the same direction here.',
       ),
     pageSize: zod
       .number()
@@ -89,35 +64,31 @@ export const getWebSocketMessages = defineTool({
       .default(10)
       .optional()
       .describe(
-        'Items per page: connections when wsid is omitted, frames in normal/group mode, or pattern groups when analyze=true. Defaults to 10.',
+        'Messages per page (for messages mode) or connections per page (for list mode). Defaults to 10.',
       ),
     pageIdx: zod
       .number()
       .int()
       .min(0)
       .optional()
-      .describe(
-        'Zero-based page for the active connection-list, frame-list, group-list, or analysis-group mode. Omit it for the first page.',
-      ),
-    show_content: zod
-      .boolean()
+      .describe('Page number (0-based).'),
+    show_content: boolParam()
       .default(false)
       .optional()
       .describe(
-        'With wsid in normal or group frame-list mode, include payload previews up to 10,000 characters for frames on the current page. Leave false for compact metadata, or use frameIndex when one exact frame needs detailed inspection.',
+        'Set to true to show full message payload. Default false (summary only) to avoid large binary output.',
       ),
     urlFilter: zod
       .string()
       .optional()
       .describe(
-        'In connection-list mode only (without wsid), return WebSocket URLs containing this substring. Use it to narrow by host, path, or query text.',
+        'Filter connections by URL (only for listing connections without wsid).',
       ),
-    includePreservedConnections: zod
-      .boolean()
+    includePreservedConnections: boolParam()
       .default(false)
       .optional()
       .describe(
-        'In connection-list mode only (without wsid), include connections preserved from the last three navigations. Use this when the relevant socket belonged to a previous page state.',
+        'Set to true to return the preserved connections over the last 3 navigations (only for listing connections without wsid).',
       ),
   },
   handler: async (request, response, context) => {
@@ -137,45 +108,30 @@ export const getWebSocketMessages = defineTool({
     // Mode: Single frame detail
     if (request.params.frameIndex !== undefined) {
       const frameIndex = request.params.frameIndex;
-      const frame = ws.frames.find(item => item.index === frameIndex);
-      if (!frame) {
-        const retainedRange =
-          ws.frames.length > 0
-            ? `${ws.frames[0].index}-${ws.frames[ws.frames.length - 1].index}`
-            : 'none';
-        throw new ToolError(
-          'NOT_FOUND',
-          `Frame index ${frameIndex} is not retained. Retained stable frame range: ${retainedRange} (${ws.frames.length} frames).`,
+      if (frameIndex >= ws.frames.length) {
+        throw new Error(
+          `Frame index ${frameIndex} out of range. Total frames: ${ws.frames.length}`,
         );
       }
+      const frame = ws.frames[frameIndex];
       const lines = formatWebSocketFrameDetail(frame, frameIndex);
       for (const line of lines) {
         response.appendResponseLine(line);
       }
-      response.setStructuredContent({
-        wsid: request.params.wsid,
-        frame: {
-          index: frame.index,
-          direction: frame.direction,
-          timestamp: frame.timestamp,
-          opcode: frame.opcode,
-          payloadBytes: frame.payloadBytes,
-          payloadData: frame.payloadData.slice(0, 10_000),
-          truncated: frame.payloadData.length > 10_000,
-        },
-      });
       return;
     }
 
     const getFilteredFrames = () => {
-      const selectedFrames = ws.frames.filter(
-        frame =>
-          !request.params.direction ||
-          frame.direction === request.params.direction,
-      );
+      const frameIndices = ws.frames
+        .map((_, index) => index)
+        .filter(
+          index =>
+            !request.params.direction ||
+            ws.frames[index].direction === request.params.direction,
+        );
       return {
-        frames: selectedFrames,
-        frameIndices: selectedFrames.map(frame => frame.index),
+        frames: frameIndices.map(index => ws.frames[index]),
+        frameIndices,
       };
     };
 
@@ -190,29 +146,13 @@ export const getWebSocketMessages = defineTool({
         frameIndices,
       );
       if (!request.params.direction) {
-        context.cacheTrafficSummary(request.params.wsid, ws.version, summary);
+        context.cacheTrafficSummary(request.params.wsid, summary);
       }
 
-      const groupPage = paginate(summary.groups, {
-        pageSize: request.params.pageSize,
-        pageIdx: request.params.pageIdx,
-      });
-      if (groupPage.invalidPage) {
-        throw new ToolError(
-          'INVALID_ARGUMENT',
-          `pageIdx ${request.params.pageIdx} is outside 0-${groupPage.totalPages - 1}.`,
-        );
-      }
-      const lines = formatTrafficSummary({
-        ...summary,
-        groups: [...groupPage.items],
-      });
+      const lines = formatTrafficSummary(summary);
       for (const line of lines) {
         response.appendResponseLine(line);
       }
-      response.appendResponseLine(
-        `Showing groups ${groupPage.startIndex + 1}-${groupPage.endIndex} of ${summary.groups.length}.`,
-      );
 
       response.appendResponseLine(``);
       response.appendResponseLine(`### Usage`);
@@ -220,25 +160,8 @@ export const getWebSocketMessages = defineTool({
         `- View group: \`get_websocket_messages(wsid=${request.params.wsid}, groupId="A")\``,
       );
       response.appendResponseLine(
-        `- View single: \`get_websocket_messages(wsid=${request.params.wsid}, frameIndex=${ws.frames[0]?.index ?? 0})\``,
+        `- View single: \`get_websocket_messages(wsid=${request.params.wsid}, frameIndex=0)\``,
       );
-      response.setStructuredContent({
-        wsid: summary.wsid,
-        url: summary.url,
-        version: ws.version,
-        totalFrames: summary.totalFrames,
-        sentCount: summary.sentCount,
-        receivedCount: summary.receivedCount,
-        groups: groupPage.items,
-        pagination: {
-          pageIdx: groupPage.currentPage,
-          pageSize: request.params.pageSize ?? 10,
-          totalItems: summary.groups.length,
-          totalPages: groupPage.totalPages,
-          hasNextPage: groupPage.hasNextPage,
-          hasPreviousPage: groupPage.hasPreviousPage,
-        },
-      });
       return;
     }
 
@@ -256,7 +179,7 @@ export const getWebSocketMessages = defineTool({
       // unfiltered cache.
       let summary = request.params.direction
         ? undefined
-        : context.getCachedTrafficSummary(request.params.wsid, ws.version);
+        : context.getCachedTrafficSummary(request.params.wsid);
 
       // If not cached, analyze and cache
       if (!summary) {
@@ -267,40 +190,30 @@ export const getWebSocketMessages = defineTool({
           frameIndices,
         );
         if (!request.params.direction) {
-          context.cacheTrafficSummary(request.params.wsid, ws.version, summary);
+          context.cacheTrafficSummary(request.params.wsid, summary);
         }
       }
 
       const indices = summary.groupToIndices.get(groupId);
       if (!indices || indices.length === 0) {
-        throw new ToolError(
-          'NOT_FOUND',
-          `WebSocket group ${groupId} was not found. Available groups: ${summary.groups.map(group => group.id).join(', ') || 'none'}.`,
+        response.appendResponseLine(`## Group ${groupId} Messages`);
+        response.appendResponseLine(`<group not found or empty>`);
+        response.appendResponseLine(``);
+        response.appendResponseLine(
+          `Available groups: ${summary.groups.map(g => g.id).join(', ')}`,
         );
+        return;
       }
 
       // Apply direction filter to indices
       let filteredIndices = indices;
       if (request.params.direction) {
-        const framesByIndex = new Map(
-          ws.frames.map(frame => [frame.index, frame]),
-        );
         filteredIndices = indices.filter(idx => {
-          const frame = framesByIndex.get(idx);
+          const frame = ws.frames[idx];
           return frame && frame.direction === request.params.direction;
         });
       }
 
-      const framePage = paginate(filteredIndices, {
-        pageSize,
-        pageIdx,
-      });
-      if (framePage.invalidPage) {
-        throw new ToolError(
-          'INVALID_ARGUMENT',
-          `pageIdx ${pageIdx} is outside 0-${framePage.totalPages - 1}.`,
-        );
-      }
       const lines = formatGroupMessages(ws.frames, filteredIndices, groupId, {
         pageSize,
         pageIdx,
@@ -308,36 +221,6 @@ export const getWebSocketMessages = defineTool({
       for (const line of lines) {
         response.appendResponseLine(line);
       }
-      if (request.params.show_content) {
-        const framesByIndex = new Map(
-          ws.frames.map(frame => [frame.index, frame]),
-        );
-        for (const index of filteredIndices.slice(
-          pageIdx * pageSize,
-          (pageIdx + 1) * pageSize,
-        )) {
-          const frame = framesByIndex.get(index);
-          if (frame) {
-            for (const line of formatWebSocketFrameDetail(frame, index)) {
-              response.appendResponseLine(line);
-            }
-          }
-        }
-      }
-      response.setStructuredContent({
-        wsid: request.params.wsid,
-        version: ws.version,
-        groupId,
-        frameIndices: framePage.items,
-        pagination: {
-          pageIdx: framePage.currentPage,
-          pageSize,
-          totalItems: filteredIndices.length,
-          totalPages: framePage.totalPages,
-          hasNextPage: framePage.hasNextPage,
-          hasPreviousPage: framePage.hasPreviousPage,
-        },
-      });
       return;
     }
 
@@ -345,14 +228,6 @@ export const getWebSocketMessages = defineTool({
     response.appendResponseLine(
       `## Recent Messages (wsid=${request.params.wsid})`,
     );
-
-    const framePage = paginate(frames, {pageSize, pageIdx});
-    if (framePage.invalidPage) {
-      throw new ToolError(
-        'INVALID_ARGUMENT',
-        `pageIdx ${pageIdx} is outside 0-${framePage.totalPages - 1}.`,
-      );
-    }
 
     const lines = formatRecentMessages(frames, {
       pageSize,
@@ -362,42 +237,5 @@ export const getWebSocketMessages = defineTool({
     for (const line of lines) {
       response.appendResponseLine(line);
     }
-    if (request.params.show_content) {
-      const pageFrames = frames.slice(
-        pageIdx * pageSize,
-        (pageIdx + 1) * pageSize,
-      );
-      for (const frame of pageFrames) {
-        for (const line of formatWebSocketFrameDetail(frame, frame.index)) {
-          response.appendResponseLine(line);
-        }
-      }
-    }
-    const pageFrames = framePage.items;
-    response.setStructuredContent({
-      wsid: request.params.wsid,
-      version: ws.version,
-      frames: pageFrames.map(frame => ({
-        index: frame.index,
-        direction: frame.direction,
-        timestamp: frame.timestamp,
-        opcode: frame.opcode,
-        payloadBytes: frame.payloadBytes,
-        ...(request.params.show_content
-          ? {
-              payloadData: frame.payloadData.slice(0, 10_000),
-              truncated: frame.payloadData.length > 10_000,
-            }
-          : {}),
-      })),
-      pagination: {
-        pageIdx: framePage.currentPage,
-        pageSize,
-        totalItems: frames.length,
-        totalPages: framePage.totalPages,
-        hasNextPage: framePage.hasNextPage,
-        hasPreviousPage: framePage.hasPreviousPage,
-      },
-    });
   },
 });

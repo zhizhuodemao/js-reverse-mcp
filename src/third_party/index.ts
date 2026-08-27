@@ -23,7 +23,7 @@ export {
 export {z as zod} from 'zod';
 
 // Patchright exports
-export {chromium} from '@zhizhuodemao/patchright';
+export {chromium} from 'patchright';
 export type {
   Browser,
   BrowserContext,
@@ -40,16 +40,13 @@ export type {
   Locator,
   Worker,
   LaunchOptions,
-} from '@zhizhuodemao/patchright';
+} from 'patchright';
 
 // CDP Protocol types from devtools-protocol
 export type {Protocol} from 'devtools-protocol';
 
 // Type aliases for backward compatibility in the codebase
 // Puppeteer used HTTPRequest/HTTPResponse, Playwright uses Request/Response
-import type {
-  Request as _Request,
-  Response as _Response,
-} from '@zhizhuodemao/patchright';
+import type {Request as _Request, Response as _Response} from 'patchright';
 export type HTTPRequest = _Request;
 export type HTTPResponse = _Response;

@@ -9,26 +9,19 @@ import fs from 'node:fs';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 import type {Tool} from '@modelcontextprotocol/sdk/types.js';
-import prettier from 'prettier';
 
-import {cliOptions} from '../src/cli.js';
-import type {YargsOptions} from '../src/third_party/index.js';
-import {ToolCategory, labels} from '../src/tools/categories.js';
+import {cliOptions} from '../build/src/cli.js';
+import {ToolCategory, labels} from '../build/src/tools/categories.js';
 
 const MCP_SERVER_PATH = 'build/src/index.js';
 const OUTPUT_PATH = './docs/tool-reference.md';
 const README_PATH = './README.md';
-const README_EN_PATH = './README_en.md';
-const CHECK_MODE = process.argv.includes('--check');
 
 // Extend the MCP Tool type to include our annotations
 interface ToolWithAnnotations extends Tool {
   annotations?: {
     title?: string;
-    category?: ToolCategory;
-  };
-  _meta?: {
-    'io.github.zhizhuodemao/category'?: ToolCategory;
+    category?: typeof ToolCategory;
   };
 }
 
@@ -67,15 +60,58 @@ function addCrossLinks(text: string, tools: ToolWithAnnotations[]): string {
 }
 
 function getCategoryName(category: string): string {
-  return labels[category as keyof typeof labels] ?? category;
+  return labels[category] ?? category;
+}
+
+function generateToolsTOC(
+  categories: Record<string, ToolWithAnnotations[]>,
+  sortedCategories: string[],
+): string {
+  let toc = '';
+
+  for (const category of sortedCategories) {
+    const categoryTools = categories[category];
+    const categoryName = getCategoryName(category);
+    toc += `- **${categoryName}** (${categoryTools.length} tools)\n`;
+
+    // Sort tools within category for TOC
+    categoryTools.sort((a: Tool, b: Tool) => a.name.localeCompare(b.name));
+    for (const tool of categoryTools) {
+      const anchorLink = tool.name.toLowerCase();
+      toc += `  - [\`${tool.name}\`](docs/tool-reference.md#${anchorLink})\n`;
+    }
+  }
+
+  return toc;
+}
+
+function updateReadmeWithToolsTOC(toolsTOC: string): void {
+  const readmeContent = fs.readFileSync(README_PATH, 'utf8');
+
+  const beginMarker = '<!-- BEGIN AUTO GENERATED TOOLS -->';
+  const endMarker = '<!-- END AUTO GENERATED TOOLS -->';
+
+  const beginIndex = readmeContent.indexOf(beginMarker);
+  const endIndex = readmeContent.indexOf(endMarker);
+
+  if (beginIndex === -1 || endIndex === -1) {
+    console.warn('Could not find auto-generated tools markers in README.md');
+    return;
+  }
+
+  const before = readmeContent.substring(0, beginIndex + beginMarker.length);
+  const after = readmeContent.substring(endIndex);
+
+  const updatedContent = before + '\n\n' + toolsTOC + '\n' + after;
+
+  fs.writeFileSync(README_PATH, updatedContent);
+  console.log('Updated README.md with tools table of contents');
 }
 
 function generateConfigOptionsMarkdown(): string {
   let markdown = '';
 
-  for (const [optionName, optionConfig] of Object.entries(cliOptions) as Array<
-    [string, YargsOptions]
-  >) {
+  for (const [optionName, optionConfig] of Object.entries(cliOptions)) {
     // Skip hidden options
     if (optionConfig.hidden) {
       continue;
@@ -89,7 +125,7 @@ function generateConfigOptionsMarkdown(): string {
     markdown += `  ${description}\n`;
 
     // Add type information
-    markdown += `  - **Type:** ${optionConfig.type}${optionConfig.array ? '[]' : ''}\n`;
+    markdown += `  - **Type:** ${optionConfig.type}\n`;
 
     // Add choices if available
     if (optionConfig.choices) {
@@ -107,34 +143,27 @@ function generateConfigOptionsMarkdown(): string {
   return markdown.trim();
 }
 
-function writeOrCheck(filePath: string, content: string): void {
-  if (CHECK_MODE) {
-    const current = fs.readFileSync(filePath, 'utf8');
-    if (current !== content) {
-      throw new Error(
-        `${filePath} is stale. Run npm run docs to regenerate documentation.`,
-      );
-    }
-    console.log(`Verified ${filePath}`);
+function updateReadmeWithOptionsMarkdown(optionsMarkdown: string): void {
+  const readmeContent = fs.readFileSync(README_PATH, 'utf8');
+
+  const beginMarker = '<!-- BEGIN AUTO GENERATED OPTIONS -->';
+  const endMarker = '<!-- END AUTO GENERATED OPTIONS -->';
+
+  const beginIndex = readmeContent.indexOf(beginMarker);
+  const endIndex = readmeContent.indexOf(endMarker);
+
+  if (beginIndex === -1 || endIndex === -1) {
+    console.warn('Could not find auto-generated options markers in README.md');
     return;
   }
-  fs.writeFileSync(filePath, content);
-  console.log(`Updated ${filePath}`);
-}
 
-function updateReadmeToolCount(filePath: string, toolCount: number): void {
-  const current = fs.readFileSync(filePath, 'utf8');
-  const pattern =
-    filePath === README_PATH ? /## 工具列表（\d+ 个）/ : /## Tools \(\d+\)/;
-  const replacement =
-    filePath === README_PATH
-      ? `## 工具列表（${toolCount} 个）`
-      : `## Tools (${toolCount})`;
-  const updated = current.replace(pattern, replacement);
-  if (updated === current && !current.includes(replacement)) {
-    throw new Error(`Could not find the tool count heading in ${filePath}`);
-  }
-  writeOrCheck(filePath, updated);
+  const before = readmeContent.substring(0, beginIndex + beginMarker.length);
+  const after = readmeContent.substring(endIndex);
+
+  const updatedContent = before + '\n\n' + optionsMarkdown + '\n\n' + after;
+
+  fs.writeFileSync(README_PATH, updatedContent);
+  console.log('Updated README.md with options markdown');
 }
 
 async function generateToolDocumentation(): Promise<void> {
@@ -143,7 +172,7 @@ async function generateToolDocumentation(): Promise<void> {
   // Create MCP client with stdio transport pointing to the built server
   const transport = new StdioClientTransport({
     command: 'node',
-    args: [MCP_SERVER_PATH],
+    args: [MCP_SERVER_PATH, '--channel', 'canary'],
   });
 
   const client = new Client(
@@ -171,22 +200,12 @@ async function generateToolDocumentation(): Promise<void> {
 
 # Chrome DevTools MCP Tool Reference
 
-**Total: ${tools.length} tools.**
-
-Every tool declares an MCP output schema. Successful calls and errors raised by
-tool handlers or runtime operations return \`structuredContent\` with a stable
-envelope: \`ok\`, \`tool\`, \`summary\`, optional machine-readable \`data\`, and an
-\`error\` object (\`code\`, \`message\`, \`retryable\`) on failure. Protocol-level
-input validation errors use the standard MCP/JSON-RPC error response. Text
-content is kept for human-readable compatibility.
-
 `;
 
     // Group tools by category (based on annotations)
     const categories: Record<string, ToolWithAnnotations[]> = {};
     toolsWithAnnotations.forEach((tool: ToolWithAnnotations) => {
-      const category =
-        tool._meta?.['io.github.zhizhuodemao/category'] || 'Uncategorized';
+      const category = tool.annotations?.category || 'Uncategorized';
       if (!categories[category]) {
         categories[category] = [];
       }
@@ -194,7 +213,7 @@ content is kept for human-readable compatibility.
     });
 
     // Sort categories using the enum order
-    const categoryOrder: string[] = Object.values(ToolCategory);
+    const categoryOrder = Object.values(ToolCategory);
     const sortedCategories = Object.keys(categories).sort((a, b) => {
       const aIndex = categoryOrder.indexOf(a);
       const bIndex = categoryOrder.indexOf(b);
@@ -210,7 +229,7 @@ content is kept for human-readable compatibility.
       const categoryTools = categories[category];
       const categoryName = getCategoryName(category);
       const anchorName = categoryName.toLowerCase().replace(/\s+/g, '-');
-      markdown += `- **[${categoryName}](#${anchorName})** (${categoryTools.length} ${categoryTools.length === 1 ? 'tool' : 'tools'})\n`;
+      markdown += `- **[${categoryName}](#${anchorName})** (${categoryTools.length} tools)\n`;
 
       // Sort tools within category for TOC
       categoryTools.sort((a: Tool, b: Tool) => a.name.localeCompare(b.name));
@@ -293,29 +312,28 @@ content is kept for human-readable compatibility.
       }
     }
 
-    markdown += `## CLI Configuration\n\n${generateConfigOptionsMarkdown()}\n`;
-
-    const formattedMarkdown = await prettier.format(markdown.trim() + '\n', {
-      parser: 'markdown',
-    });
-    writeOrCheck(OUTPUT_PATH, formattedMarkdown);
+    // Write the documentation to file
+    fs.writeFileSync(OUTPUT_PATH, markdown.trim() + '\n');
 
     console.log(
       `Generated documentation for ${toolsWithAnnotations.length} tools in ${OUTPUT_PATH}`,
     );
 
-    updateReadmeToolCount(README_PATH, toolsWithAnnotations.length);
-    updateReadmeToolCount(README_EN_PATH, toolsWithAnnotations.length);
+    // Generate tools TOC and update README
+    const toolsTOC = generateToolsTOC(categories, sortedCategories);
+    updateReadmeWithToolsTOC(toolsTOC);
 
+    // Generate and update configuration options
+    const optionsMarkdown = generateConfigOptionsMarkdown();
+    updateReadmeWithOptionsMarkdown(optionsMarkdown);
+    // Clean up
     await client.close();
+    process.exit(0);
   } catch (error) {
     console.error('Error generating documentation:', error);
-    await client.close().catch(() => undefined);
-    throw error;
+    process.exit(1);
   }
 }
 
 // Run the documentation generator
-generateToolDocumentation().catch(() => {
-  process.exitCode = 1;
-});
+generateToolDocumentation().catch(console.error);

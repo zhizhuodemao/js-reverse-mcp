@@ -113,37 +113,12 @@ function withTimeout<T>(
   ms: number,
   message = 'Timed out fetching body',
 ): Promise<T> {
-  return (async () => {
-    type Settled =
-      | {status: 'fulfilled'; value: T}
-      | {status: 'rejected'; reason: unknown};
-    const settled: Promise<Settled> = promise.then(
-      value => ({status: 'fulfilled', value}),
-      reason => ({status: 'rejected', reason}),
-    );
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<'timeout'>(resolve => {
-      timeoutId = setTimeout(() => resolve('timeout'), ms);
-    });
-
-    try {
-      const first = await Promise.race([settled, timeout]);
-      if (first === 'timeout') {
-        // The protocol call is not cancellable. Drain it before returning so a
-        // tool timeout cannot release the global mutex while it is still live.
-        await settled;
-        throw new Error(message);
-      }
-      if (first.status === 'rejected') {
-        throw first.reason;
-      }
-      return first.value;
-    } finally {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-    }
-  })();
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(message)), ms),
+    ),
+  ]);
 }
 
 export function isRequestPending(request: HTTPRequest): boolean {
@@ -159,7 +134,7 @@ export function getPendingRequestStatus(): string {
 }
 
 export function getPendingResponseError(part: NetworkExportPart): string {
-  return `Request is pending. Resume execution with pause_or_resume(action="resume"), then retry outputPart="${part}".`;
+  return `Request is pending. Resume execution with pause_or_resume, then retry outputPart="${part}".`;
 }
 
 export async function getResponseIfCompleted(
@@ -523,7 +498,7 @@ export async function getNetworkRequestExportHints(
 
   if (isRequestPending(httpRequest)) {
     hints.push(
-      'Request is pending. Resume execution with pause_or_resume(action="resume") before exporting responseHeaders, responseBody, or all.',
+      'Request is pending. Resume execution with pause_or_resume before exporting responseHeaders, responseBody, or all.',
     );
     return [...new Set(hints)];
   }

@@ -152,6 +152,7 @@ log.txt
 
 # MCP config
 .mcp.json
+/browser-connection/
 
 # npm auth
 .npmrc

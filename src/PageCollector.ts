@@ -6,11 +6,25 @@
 
 import type {Protocol} from 'devtools-protocol';
 
+import type {
+  AggregatedIssue,
+  Common,
+} from '../node_modules/chrome-devtools-frontend/mcp/mcp.js';
+import {
+  IssueAggregatorEvents,
+  IssuesManagerEvents,
+  createIssuesFromProtocolIssue,
+  IssueAggregator,
+} from '../node_modules/chrome-devtools-frontend/mcp/mcp.js';
+
 import {addCdpEventListener, removeCdpEventListener} from './CdpEvents.js';
 import type {CdpSessionProvider} from './CdpSessionProvider.js';
+import {FakeIssuesManager} from './DevtoolsUtils.js';
+import {features} from './features.js';
 import {logger} from './logger.js';
 import type {
   BrowserContext,
+  CDPSession,
   ConsoleMessage,
   Frame,
   HTTPRequest,
@@ -62,6 +76,7 @@ interface PageEvents {
   requestfinished: HTTPRequest;
   response: HTTPResponse;
   framenavigated: Frame;
+  issue: AggregatedIssue;
 }
 
 export type ListenerMap<EventMap extends PageEvents = PageEvents> = {
@@ -132,6 +147,58 @@ export const responseBodyCacheSymbol = Symbol('responseBodyCacheSymbol');
  */
 const responseBodySizeSymbol = Symbol('responseBodySizeSymbol');
 
+interface SyntheticConsoleArg {
+  jsonValue(): Promise<unknown>;
+}
+
+function consoleTypeFromCdp(type: string): string {
+  return type === 'warning' ? 'warn' : type;
+}
+
+function remoteObjectValue(arg: Protocol.Runtime.RemoteObject): unknown {
+  if (arg.type === 'undefined') return undefined;
+  if ('value' in arg) return arg.value;
+  if (arg.unserializableValue !== undefined) return arg.unserializableValue;
+  if (arg.description !== undefined) return arg.description;
+  return arg.type;
+}
+
+function remoteObjectText(arg: Protocol.Runtime.RemoteObject): string {
+  const value = remoteObjectValue(arg);
+  if (value === undefined) return 'undefined';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value !== null) {
+    try {
+      return JSON.stringify(value) ?? String(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function syntheticConsoleMessage(
+  event: Protocol.Runtime.ConsoleAPICalledEvent,
+): ConsoleMessage {
+  const callFrame = event.stackTrace?.callFrames?.[0];
+  const args = event.args.map(
+    (arg): SyntheticConsoleArg => ({
+      jsonValue: async () => remoteObjectValue(arg),
+    }),
+  );
+
+  return {
+    type: () => consoleTypeFromCdp(event.type),
+    text: () => event.args.map(remoteObjectText).join(' '),
+    location: () => ({
+      url: callFrame?.url ?? '',
+      lineNumber: callFrame?.lineNumber ?? 0,
+      columnNumber: callFrame?.columnNumber ?? 0,
+    }),
+    args: () => args,
+  } as unknown as ConsoleMessage;
+}
+
 export type CachedResponseBody =
   | {ok: true; buffer: Buffer}
   | {ok: false; error: string}
@@ -150,13 +217,6 @@ export const MAX_CACHED_BODY_BYTES = 5 * 1024 * 1024;
 export const MAX_CACHED_TOTAL_BYTES = 50 * 1024 * 1024;
 
 /**
- * Bound simultaneous response.body() allocations independently of declared
- * byte sizes. Servers can omit or lie about content-length, so byte reservation
- * alone cannot constrain transient memory.
- */
-export const MAX_IN_FLIGHT_BODY_CAPTURES = 8;
-
-/**
  * Upper bound on retained network request records per page. The network
  * collector keeps a single flat FIFO queue (navigation-agnostic): once the
  * queue exceeds this cap the oldest request is evicted, and evicting a record
@@ -168,8 +228,6 @@ export const MAX_IN_FLIGHT_BODY_CAPTURES = 8;
 const MAX_RETAINED_REQUESTS = 5000;
 
 const BODY_CAPTURE_TIMEOUT_MS = 5000;
-
-class BodyCaptureTimeoutError extends Error {}
 
 /**
  * Upper bound on retained per-page initiator entries, sized to match the request
@@ -190,7 +248,6 @@ export class PageCollector<T> {
     collector: (item: T) => void,
   ) => ListenerMap<PageEvents>;
   #listeners = new WeakMap<Page, ListenerMap>();
-  #pageCloseListeners = new WeakMap<Page, () => void>();
   #maxNavigationSaved = 3;
   #maxItemsPerNavigation = 1000;
 
@@ -216,7 +273,7 @@ export class PageCollector<T> {
   async init() {
     const pages = this.#context.pages();
     for (const page of pages) {
-      await this.addPage(page);
+      this.addPage(page);
     }
 
     this.#context.on('page', this.#onPageCreated);
@@ -224,19 +281,16 @@ export class PageCollector<T> {
 
   dispose() {
     this.#context.off('page', this.#onPageCreated);
-    for (const page of this.#context.pages()) {
-      this.cleanupPageDestroyed(page);
-    }
   }
 
   #onPageCreated = (page: Page) => {
-    const initialization = this.addPage(page);
-    void initialization.catch(error => {
-      logger('Failed to initialize collector for a new page', error);
+    this.addPage(page);
+    page.on('close', () => {
+      this.cleanupPageDestroyed(page);
     });
   };
 
-  public async addPage(page: Page): Promise<void> {
+  public addPage(page: Page) {
     this.#initializePage(page);
   }
 
@@ -247,9 +301,6 @@ export class PageCollector<T> {
     const idGenerator = createIdGenerator();
     const storedLists: Array<Array<WithSymbolId<T>>> = [[]];
     this.storage.set(page, storedLists);
-    const onClose = () => this.cleanupPageDestroyed(page);
-    this.#pageCloseListeners.set(page, onClose);
-    page.on('close', onClose);
 
     const listeners = this.#listenersInitializer(value => {
       const withId = value as WithSymbolId<T>;
@@ -296,18 +347,12 @@ export class PageCollector<T> {
   }
 
   protected cleanupPageDestroyed(page: Page) {
-    const onClose = this.#pageCloseListeners.get(page);
-    if (onClose) {
-      page.off('close', onClose);
-      this.#pageCloseListeners.delete(page);
-    }
     const listeners = this.#listeners.get(page);
     if (listeners) {
       for (const [name, listener] of pageListenerEntries(listeners)) {
         removePageListener(page, name, listener);
       }
     }
-    this.#listeners.delete(page);
     this.storage.delete(page);
   }
 
@@ -373,80 +418,307 @@ export class PageCollector<T> {
   }
 }
 
-export class ConsoleCollector extends PageCollector<ConsoleMessage | Error> {}
+export class ConsoleCollector extends PageCollector<
+  ConsoleMessage | Error | AggregatedIssue
+> {
+  #subscribedPages = new WeakMap<Page, PageIssueSubscriber>();
+  #runtimeConsoleSubscribers = new WeakMap<
+    Page,
+    {
+      session: CDPSession;
+      handler: (event: Protocol.Runtime.ConsoleAPICalledEvent) => void;
+    }
+  >();
+  #sessionProvider: CdpSessionProvider;
+  // Per-page issue collectors that feed into the PageCollector's storage
+  #pageIssueCollectors = new WeakMap<Page, (issue: AggregatedIssue) => void>();
+  #cdpReady = false;
+
+  constructor(
+    context: BrowserContext,
+    sessionProvider: CdpSessionProvider,
+    listeners: (
+      collector: (item: ConsoleMessage | Error | AggregatedIssue) => void,
+    ) => ListenerMap<PageEvents>,
+  ) {
+    // Wrap the original listener initializer to capture per-page collectors
+    const wrappedListeners = (
+      collector: (item: ConsoleMessage | Error | AggregatedIssue) => void,
+    ) => {
+      // Call the original to get the base listeners
+      const baseListeners = listeners(collector);
+      // The 'issue' key in baseListeners calls collector(event)
+      // We'll also use this collector reference for PageIssueSubscriber
+      return baseListeners;
+    };
+    super(context, wrappedListeners);
+    this.#sessionProvider = sessionProvider;
+  }
+
+  override addPage(page: Page): void {
+    super.addPage(page);
+    // Only set up CDP issue subscriber if CDP has been initialized
+    if (this.#cdpReady) {
+      this.#setupIssueSubscriber(page);
+      void this.#setupRuntimeConsoleSubscriber(page);
+    }
+  }
+
+  /**
+   * Initialize CDP-dependent features (Audits.enable for issue collection).
+   * Called lazily to avoid leaking CDP signals during navigation.
+   */
+  async initCdp(): Promise<void> {
+    if (this.#cdpReady) return;
+    this.#cdpReady = true;
+    // Set up issue subscribers for all already-tracked pages
+    const runtimeSubscriptions: Array<Promise<void>> = [];
+    for (const page of this.context.pages()) {
+      if (this.storage.has(page)) {
+        this.#setupIssueSubscriber(page);
+        runtimeSubscriptions.push(this.#setupRuntimeConsoleSubscriber(page));
+      }
+    }
+    await Promise.all(runtimeSubscriptions);
+  }
+
+  async #setupRuntimeConsoleSubscriber(page: Page): Promise<void> {
+    if (this.#runtimeConsoleSubscribers.has(page)) {
+      return;
+    }
+
+    try {
+      const session = await this.#sessionProvider.getSession(page);
+      const handler = (event: Protocol.Runtime.ConsoleAPICalledEvent) => {
+        this.#storeCdpConsoleMessage(page, syntheticConsoleMessage(event));
+      };
+      this.#runtimeConsoleSubscribers.set(page, {session, handler});
+      addCdpEventListener(session, 'Runtime.consoleAPICalled', handler);
+      await session.send('Runtime.enable');
+    } catch (error) {
+      const subscriber = this.#runtimeConsoleSubscribers.get(page);
+      if (subscriber) {
+        removeCdpEventListener(
+          subscriber.session,
+          'Runtime.consoleAPICalled',
+          subscriber.handler,
+        );
+        this.#runtimeConsoleSubscribers.delete(page);
+      }
+      logger('Error subscribing to console runtime events', error);
+    }
+  }
+
+  #storeCdpConsoleMessage(page: Page, message: ConsoleMessage): void {
+    const navigations = this.storage.get(page);
+    if (!navigations) {
+      return;
+    }
+    const withId = message as WithSymbolId<
+      ConsoleMessage | Error | AggregatedIssue
+    >;
+    withId[stableIdSymbol] = this.#nextStableId(page);
+    this.store(page, withId);
+  }
+
+  #nextStableId(page: Page): number {
+    const navigations = this.storage.get(page) ?? [];
+    let max = 0;
+    for (const navigation of navigations) {
+      for (const item of navigation) {
+        const id = item[stableIdSymbol];
+        if (typeof id === 'number' && id > max) {
+          max = id;
+        }
+      }
+    }
+    return max + 1;
+  }
+
+  #setupIssueSubscriber(page: Page): void {
+    if (!features.issues) {
+      return;
+    }
+    if (!this.#subscribedPages.has(page)) {
+      // Create a direct collector that adds issues to this page's storage with stable IDs
+      const idGen = createIdGenerator();
+      const issueCollector = (issue: AggregatedIssue) => {
+        const navigations = this.storage.get(page);
+        if (navigations && navigations[0]) {
+          const withId = issue as WithSymbolId<
+            ConsoleMessage | Error | AggregatedIssue
+          >;
+          withId[stableIdSymbol] = idGen();
+          navigations[0].push(withId);
+        }
+      };
+      this.#pageIssueCollectors.set(page, issueCollector);
+      const subscriber = new PageIssueSubscriber(
+        page,
+        this.#sessionProvider,
+        issueCollector,
+      );
+      this.#subscribedPages.set(page, subscriber);
+      void subscriber.subscribe();
+    }
+  }
+
+  protected override cleanupPageDestroyed(page: Page): void {
+    super.cleanupPageDestroyed(page);
+    const runtimeSubscriber = this.#runtimeConsoleSubscribers.get(page);
+    if (runtimeSubscriber) {
+      removeCdpEventListener(
+        runtimeSubscriber.session,
+        'Runtime.consoleAPICalled',
+        runtimeSubscriber.handler,
+      );
+      this.#runtimeConsoleSubscribers.delete(page);
+    }
+    this.#subscribedPages.get(page)?.unsubscribe();
+    this.#subscribedPages.delete(page);
+  }
+}
+
+class PageIssueSubscriber {
+  #issueManager = new FakeIssuesManager();
+  #issueAggregator = new IssueAggregator(this.#issueManager);
+  #seenKeys = new Set<string>();
+  #seenIssues = new Set<AggregatedIssue>();
+  #page: Page;
+  #sessionProvider: CdpSessionProvider;
+  #session: CDPSession | null = null;
+  #onIssueCallback: (issue: AggregatedIssue) => void;
+
+  constructor(
+    page: Page,
+    sessionProvider: CdpSessionProvider,
+    onIssue: (issue: AggregatedIssue) => void,
+  ) {
+    this.#page = page;
+    this.#sessionProvider = sessionProvider;
+    this.#onIssueCallback = onIssue;
+  }
+
+  #resetIssueAggregator() {
+    this.#issueManager = new FakeIssuesManager();
+    if (this.#issueAggregator) {
+      this.#issueAggregator.removeEventListener(
+        IssueAggregatorEvents.AGGREGATED_ISSUE_UPDATED,
+        this.#onAggregatedissue,
+      );
+    }
+    this.#issueAggregator = new IssueAggregator(this.#issueManager);
+
+    this.#issueAggregator.addEventListener(
+      IssueAggregatorEvents.AGGREGATED_ISSUE_UPDATED,
+      this.#onAggregatedissue,
+    );
+  }
+
+  async subscribe() {
+    this.#resetIssueAggregator();
+    this.#page.on('framenavigated', this.#onFrameNavigated);
+    try {
+      this.#session = await this.#sessionProvider.getSession(this.#page);
+      addCdpEventListener(
+        this.#session,
+        'Audits.issueAdded',
+        this.#onIssueAdded,
+      );
+      await this.#session.send('Audits.enable');
+    } catch (error) {
+      logger('Error subscribing to issues', error);
+    }
+  }
+
+  unsubscribe() {
+    this.#seenKeys.clear();
+    this.#seenIssues.clear();
+    this.#page.off('framenavigated', this.#onFrameNavigated);
+    if (this.#session) {
+      removeCdpEventListener(
+        this.#session,
+        'Audits.issueAdded',
+        this.#onIssueAdded,
+      );
+    }
+    if (this.#issueAggregator) {
+      this.#issueAggregator.removeEventListener(
+        IssueAggregatorEvents.AGGREGATED_ISSUE_UPDATED,
+        this.#onAggregatedissue,
+      );
+    }
+    if (this.#session) {
+      void this.#session.send('Audits.disable').catch(() => {
+        // might fail.
+      });
+    }
+  }
+
+  #onAggregatedissue = (
+    event: Common.EventTarget.EventTargetEvent<AggregatedIssue>,
+  ) => {
+    if (this.#seenIssues.has(event.data)) {
+      return;
+    }
+    this.#seenIssues.add(event.data);
+    this.#onIssueCallback(event.data);
+  };
+
+  // On navigation, we reset issue aggregation.
+  #onFrameNavigated = (frame: Frame) => {
+    // Only split the storage on main frame navigation
+    if (frame !== frame.page().mainFrame()) {
+      return;
+    }
+    this.#seenKeys.clear();
+    this.#seenIssues.clear();
+    this.#resetIssueAggregator();
+  };
+
+  #onIssueAdded = (data: Protocol.Audits.IssueAddedEvent) => {
+    try {
+      const inspectorIssue = data.issue;
+      // @ts-expect-error Types of protocol from Playwright and CDP are
+      // incomparable for InspectorIssueCode, one is union, other is enum.
+      const issue = createIssuesFromProtocolIssue(null, inspectorIssue)[0];
+      if (!issue) {
+        logger('No issue mapping for for the issue: ', inspectorIssue.code);
+        return;
+      }
+
+      const primaryKey = issue.primaryKey();
+      if (this.#seenKeys.has(primaryKey)) {
+        return;
+      }
+      this.#seenKeys.add(primaryKey);
+      this.#issueManager.dispatchEventToListeners(
+        IssuesManagerEvents.ISSUE_ADDED,
+        {
+          issue,
+          // @ts-expect-error We don't care that issues model is null
+          issuesModel: null,
+        },
+      );
+    } catch (error) {
+      logger('Error creating a new issue', error);
+    }
+  };
+}
 
 const cdpRequestIdSymbol = Symbol('cdpRequestId');
-const responseBodyPageSymbol = Symbol('responseBodyPage');
 type RequestWithNetworkMetadata = HTTPRequest & {
   [cdpRequestIdSymbol]?: string;
   [networkRequestObservedAtSymbol]?: number;
   [responseBodyCacheSymbol]?: Promise<CachedResponseBody>;
   [responseBodySizeSymbol]?: number;
-  [responseBodyPageSymbol]?: Page;
 };
 
 /**
  * Per-page running total of cached response body bytes. Keyed weakly so it is
  * released when the page is GC'd; also cleared explicitly on page destroy.
  */
-interface ResponseBodyCacheState {
-  bytes: number;
-  generation: number;
-  retained: Set<RequestWithNetworkMetadata>;
-  reservedBytes: number;
-  reservations: Set<{bytes: number; generation: number}>;
-}
-
-const responseBodyBudget = new WeakMap<Page, ResponseBodyCacheState>();
-
-function getResponseBodyState(page: Page): ResponseBodyCacheState {
-  let state = responseBodyBudget.get(page);
-  if (!state) {
-    state = {
-      bytes: 0,
-      generation: 0,
-      retained: new Set(),
-      reservedBytes: 0,
-      reservations: new Set(),
-    };
-    responseBodyBudget.set(page, state);
-  }
-  return state;
-}
-
-function reserveResponseBodyCapture(
-  state: ResponseBodyCacheState,
-  declaredBytes: number,
-): {bytes: number; generation: number} | undefined {
-  if (state.reservations.size >= MAX_IN_FLIGHT_BODY_CAPTURES) {
-    return undefined;
-  }
-
-  // Missing/zero lengths reserve the full per-response allowance. A declared
-  // length still uses an in-flight slot in case the server understates it.
-  const bytes =
-    Number.isFinite(declaredBytes) && declaredBytes > 0
-      ? declaredBytes
-      : MAX_CACHED_BODY_BYTES;
-  if (state.bytes + state.reservedBytes + bytes > MAX_CACHED_TOTAL_BYTES) {
-    return undefined;
-  }
-
-  const reservation = {bytes, generation: state.generation};
-  state.reservations.add(reservation);
-  state.reservedBytes += bytes;
-  return reservation;
-}
-
-function releaseResponseBodyReservation(
-  state: ResponseBodyCacheState,
-  reservation: {bytes: number; generation: number},
-): void {
-  if (!state.reservations.delete(reservation)) {
-    return;
-  }
-  state.reservedBytes = Math.max(0, state.reservedBytes - reservation.bytes);
-}
+const responseBodyBudget = new WeakMap<Page, {bytes: number}>();
 
 function pageForRequest(req: HTTPRequest): Page | undefined {
   try {
@@ -458,24 +730,15 @@ function pageForRequest(req: HTTPRequest): Page | undefined {
 }
 
 function withCaptureTimeout<T>(promise: Promise<T>): Promise<T> {
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
   return Promise.race([
     promise,
-    new Promise<never>(
-      (_, reject) =>
-        (timeoutId = setTimeout(
-          () =>
-            reject(
-              new BodyCaptureTimeoutError('Timed out capturing response body'),
-            ),
-          BODY_CAPTURE_TIMEOUT_MS,
-        )),
+    new Promise<never>((_, reject) =>
+      setTimeout(
+        () => reject(new Error('Timed out capturing response body')),
+        BODY_CAPTURE_TIMEOUT_MS,
+      ),
     ),
-  ]).finally(() => {
-    if (timeoutId) {
-      clearTimeout(timeoutId);
-    }
-  });
+  ]);
 }
 
 /**
@@ -490,36 +753,11 @@ function captureResponseBody(req: HTTPRequest): void {
   if (request[responseBodyCacheSymbol]) {
     return;
   }
-  const page = pageForRequest(req) ?? request[responseBodyPageSymbol];
-  if (!page) {
-    request[responseBodyCacheSymbol] = Promise.resolve({
-      ok: 'skipped',
-      reason: 'request is not associated with a page cache budget',
-    });
-    return;
-  }
-  const state = getResponseBodyState(page);
   request[responseBodyCacheSymbol] = (async (): Promise<CachedResponseBody> => {
-    let reservation: {bytes: number; generation: number} | undefined;
     try {
-      if (!state.retained.has(request)) {
-        return {
-          ok: 'skipped',
-          reason: 'response body cache generation was invalidated',
-        };
-      }
       const resp = await req.response();
       if (!resp) {
         return {ok: false, error: 'No response available'};
-      }
-      if (
-        responseBodyBudget.get(page) !== state ||
-        !state.retained.has(request)
-      ) {
-        return {
-          ok: 'skipped',
-          reason: 'response body cache generation was invalidated',
-        };
       }
       const declared = Number(resp.headers()['content-length'] ?? 0);
       if (declared > MAX_CACHED_BODY_BYTES) {
@@ -528,79 +766,53 @@ function captureResponseBody(req: HTTPRequest): void {
           reason: `content-length ${declared} exceeds cache limit`,
         };
       }
-      reservation = reserveResponseBodyCapture(state, declared);
-      if (!reservation) {
-        return {
-          ok: 'skipped',
-          reason: 'page cache capture capacity exhausted',
-        };
-      }
-      const bodyPromise = resp.body();
-      let buffer: Buffer;
-      try {
-        buffer = await withCaptureTimeout(bodyPromise);
-      } catch (error) {
-        if (error instanceof BodyCaptureTimeoutError && reservation) {
-          // The timeout only bounds readers of the cache promise; it does not
-          // cancel Patchright's underlying body allocation. Keep the slot and
-          // byte reservation until that operation really settles so repeated
-          // timeouts cannot create unbounded concurrent allocations.
-          const heldReservation = reservation;
-          reservation = undefined;
-          void bodyPromise
-            .then(
-              () => undefined,
-              () => undefined,
-            )
-            .finally(() => {
-              releaseResponseBodyReservation(state, heldReservation);
-            });
-        }
-        throw error;
-      }
+      const buffer = await withCaptureTimeout(resp.body());
       if (buffer.length > MAX_CACHED_BODY_BYTES) {
         return {
           ok: 'skipped',
           reason: `body ${buffer.length} bytes exceeds cache limit`,
         };
       }
-      if (
-        responseBodyBudget.get(page) !== state ||
-        state.generation !== reservation.generation ||
-        !state.retained.has(request)
-      ) {
-        return {
-          ok: 'skipped',
-          reason: 'response body cache generation was invalidated',
-        };
+      const page = pageForRequest(req);
+      if (page) {
+        const budget = responseBodyBudget.get(page) ?? {bytes: 0};
+        if (budget.bytes + buffer.length > MAX_CACHED_TOTAL_BYTES) {
+          return {ok: 'skipped', reason: 'page cache budget exhausted'};
+        }
+        budget.bytes += buffer.length;
+        responseBodyBudget.set(page, budget);
+        // Record the counted size so eviction can reclaim it from the budget.
+        request[responseBodySizeSymbol] = buffer.length;
       }
-      if (
-        state.bytes + state.reservedBytes - reservation.bytes + buffer.length >
-        MAX_CACHED_TOTAL_BYTES
-      ) {
-        return {ok: 'skipped', reason: 'page cache budget exhausted'};
-      }
-      releaseResponseBodyReservation(state, reservation);
-      reservation = undefined;
-      state.bytes += buffer.length;
-      // Record the counted size so eviction can reclaim it from the budget.
-      request[responseBodySizeSymbol] = buffer.length;
       return {ok: true, buffer};
     } catch (error) {
       return {
         ok: false,
         error: error instanceof Error ? error.message : String(error),
       };
-    } finally {
-      if (reservation) {
-        releaseResponseBodyReservation(state, reservation);
-      }
     }
   })();
 }
 
 function initiatorKey(url: string, method: string): string {
   return `${method} ${url}`;
+}
+
+/**
+ * Detect Patchright's internal addInitScript injection request.
+ *
+ * When addInitScript is used (persistent hooks, import_state), Patchright issues
+ * a sentinel navigation to `patchright-init-script-inject.internal` as its
+ * injection mechanism. This request is not real page traffic — it pollutes the
+ * network list and, because it is typed as a document request, can mask the real
+ * document request. It is filtered out of all network collection.
+ */
+function isInternalInjectionRequest(req: HTTPRequest): boolean {
+  try {
+    return req.url().includes('patchright-init-script-inject.internal');
+  } catch {
+    return false;
+  }
 }
 
 export class NetworkCollector extends PageCollector<HTTPRequest> {
@@ -612,10 +824,7 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
   #initiatorsByKey = new WeakMap<Page, Map<string, RequestInitiator>>();
   #cdpListeners = new WeakMap<Page, () => void>();
   #sessionProvider: CdpSessionProvider;
-  #cdpRequested = false;
-  #cdpInitialization?: Promise<void>;
-  #pageCdpInitializations = new WeakMap<Page, Promise<void>>();
-  #pendingCdpInitializations = new Set<Promise<void>>();
+  #cdpReady = false;
 
   constructor(
     context: BrowserContext,
@@ -638,9 +847,18 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
     // Always capture the response body at requestfinished — before a navigation
     // can evict it — regardless of which listeners variant is supplied.
     super(context, collect => {
-      const map = baseListeners(collect);
+      // Filter out internal Patchright addInitScript injection requests
+      // (patchright-init-script-inject.internal). These are produced when
+      // addInitScript is used (persistent hooks, import_state) and otherwise
+      // pollute the network list and can mask the real document request.
+      const filteredCollect = (item: HTTPRequest) => {
+        if (isInternalInjectionRequest(item)) return;
+        collect(item);
+      };
+      const map = baseListeners(filteredCollect);
       const existingFinished = map.requestfinished;
       map.requestfinished = req => {
+        if (isInternalInjectionRequest(req)) return;
         captureResponseBody(req);
         existingFinished?.(req);
       };
@@ -649,10 +867,11 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
     this.#sessionProvider = sessionProvider;
   }
 
-  override async addPage(page: Page): Promise<void> {
-    await super.addPage(page);
-    if (this.#cdpRequested) {
-      await this.#setupInitiatorCollection(page);
+  override addPage(page: Page): void {
+    super.addPage(page);
+    // Only set up CDP initiator collection if CDP has been initialized
+    if (this.#cdpReady) {
+      void this.#setupInitiatorCollection(page);
     }
   }
 
@@ -661,160 +880,99 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
    * Called lazily to avoid leaking CDP signals during navigation.
    */
   async initCdp(): Promise<void> {
-    this.#cdpRequested = true;
-    if (this.#cdpInitialization) {
-      await this.#cdpInitialization;
-      return;
-    }
-
-    const initialization = this.#initializeCdp();
-    this.#cdpInitialization = initialization;
-    try {
-      await initialization;
-    } finally {
-      if (this.#cdpInitialization === initialization) {
-        this.#cdpInitialization = undefined;
-      }
-    }
-  }
-
-  async #initializeCdp(): Promise<void> {
+    if (this.#cdpReady) return;
+    this.#cdpReady = true;
+    // Set up CDP initiator collection for all already-tracked pages
     for (const page of this.context.pages()) {
       if (this.storage.has(page)) {
-        // The pending set below is the source of truth; this catch prevents an
-        // event-loop unhandled rejection before the drain observes a failure.
-        void this.#setupInitiatorCollection(page).catch(() => undefined);
+        void this.#setupInitiatorCollection(page);
       }
-    }
-    await this.#drainCdpInitializations();
-  }
-
-  async #drainCdpInitializations(): Promise<void> {
-    let firstError: unknown;
-    let failed = false;
-    while (this.#pendingCdpInitializations.size > 0) {
-      const pending = [...this.#pendingCdpInitializations];
-      const results = await Promise.allSettled(pending);
-      const rejection = results.find(result => result.status === 'rejected');
-      if (!failed && rejection?.status === 'rejected') {
-        failed = true;
-        firstError = rejection.reason;
-      }
-    }
-    if (failed) {
-      throw firstError;
     }
   }
 
-  #setupInitiatorCollection(page: Page): Promise<void> {
-    if (this.#cdpListeners.has(page)) {
-      return Promise.resolve();
-    }
-    const pending = this.#pageCdpInitializations.get(page);
-    if (pending) {
-      return pending;
-    }
-
-    const operation = this.#performInitiatorSetup(page);
-    const initialization = operation.finally(() => {
-      if (this.#pageCdpInitializations.get(page) === initialization) {
-        this.#pageCdpInitializations.delete(page);
-      }
-      this.#pendingCdpInitializations.delete(initialization);
-    });
-    this.#pageCdpInitializations.set(page, initialization);
-    this.#pendingCdpInitializations.add(initialization);
-    return initialization;
-  }
-
-  async #performInitiatorSetup(page: Page): Promise<void> {
-    const initiatorMap = new Map<string, RequestInitiator>();
-    const initiatorByKey = new Map<string, RequestInitiator>();
-    const client = await this.#sessionProvider.getSession(page);
-    if (!this.storage.has(page)) {
+  async #setupInitiatorCollection(page: Page): Promise<void> {
+    if (this.#initiators.has(page)) {
       return;
     }
 
-    // Listen before enabling the domain so the first emitted request cannot
-    // land in the gap between Network.enable and listener registration.
-    const onRequestWillBeSent = (
-      event: Protocol.Network.RequestWillBeSentEvent,
-    ): void => {
-      if (event.initiator) {
-        initiatorMap.set(event.requestId, event.initiator as RequestInitiator);
-        // Also key by URL+method so getInitiator can recover the initiator
-        // even when the requestId mapping below loses the delivery race.
-        initiatorByKey.set(
-          initiatorKey(event.request.url, event.request.method),
-          event.initiator as RequestInitiator,
-        );
-        // Bound memory: drop oldest entries beyond the cap (Map preserves
-        // insertion order, so the first key is the oldest).
-        while (initiatorMap.size > MAX_INITIATOR_ENTRIES) {
-          const oldest = initiatorMap.keys().next().value;
-          if (oldest === undefined) {
-            break;
-          }
-          initiatorMap.delete(oldest);
-        }
-        while (initiatorByKey.size > MAX_INITIATOR_ENTRIES) {
-          const oldest = initiatorByKey.keys().next().value;
-          if (oldest === undefined) {
-            break;
-          }
-          initiatorByKey.delete(oldest);
-        }
-      }
+    const initiatorMap = new Map<string, RequestInitiator>();
+    this.#initiators.set(page, initiatorMap);
+    const initiatorByKey = new Map<string, RequestInitiator>();
+    this.#initiatorsByKey.set(page, initiatorByKey);
 
-      // Map CDP request ID to Playwright Request via URL+method matching.
-      const navigations = this.storage.get(page);
-      if (navigations) {
-        for (const navigation of navigations) {
-          for (const request of navigation) {
-            const req = request as RequestWithNetworkMetadata;
-            if (
-              !req[cdpRequestIdSymbol] &&
-              req.url() === event.request.url &&
-              req.method() === event.request.method
-            ) {
-              req[cdpRequestIdSymbol] = event.requestId;
+    try {
+      const client = await this.#sessionProvider.getSession(page);
+      await client.send('Network.enable');
+
+      // Listen to CDP events for initiator info and request ID mapping
+      const onRequestWillBeSent = (
+        event: Protocol.Network.RequestWillBeSentEvent,
+      ): void => {
+        if (event.initiator) {
+          initiatorMap.set(
+            event.requestId,
+            event.initiator as RequestInitiator,
+          );
+          // Also key by URL+method so getInitiator can recover the initiator
+          // even when the requestId mapping below loses the delivery race.
+          initiatorByKey.set(
+            initiatorKey(event.request.url, event.request.method),
+            event.initiator as RequestInitiator,
+          );
+          // Bound memory: drop oldest entries beyond the cap (Map preserves
+          // insertion order, so the first key is the oldest).
+          while (initiatorMap.size > MAX_INITIATOR_ENTRIES) {
+            const oldest = initiatorMap.keys().next().value;
+            if (oldest === undefined) {
               break;
+            }
+            initiatorMap.delete(oldest);
+          }
+          while (initiatorByKey.size > MAX_INITIATOR_ENTRIES) {
+            const oldest = initiatorByKey.keys().next().value;
+            if (oldest === undefined) {
+              break;
+            }
+            initiatorByKey.delete(oldest);
+          }
+        }
+
+        // Map CDP request ID to Playwright Request via URL+method matching
+        // This allows us to correlate Playwright Request objects with CDP request IDs
+        const navigations = this.storage.get(page);
+        if (navigations) {
+          for (const navigation of navigations) {
+            for (const request of navigation) {
+              const req = request as RequestWithNetworkMetadata;
+              if (
+                !req[cdpRequestIdSymbol] &&
+                req.url() === event.request.url &&
+                req.method() === event.request.method
+              ) {
+                req[cdpRequestIdSymbol] = event.requestId;
+                break;
+              }
             }
           }
         }
-      }
-    };
+      };
 
-    const cleanup = () => {
-      removeCdpEventListener(
-        client,
-        'Network.requestWillBeSent',
-        onRequestWillBeSent,
-      );
-    };
-
-    let listenerAttached = false;
-    try {
       addCdpEventListener(
         client,
         'Network.requestWillBeSent',
         onRequestWillBeSent,
       );
-      listenerAttached = true;
-      await client.send('Network.enable');
-      if (!this.storage.has(page)) {
-        cleanup();
-        return;
-      }
 
-      this.#initiators.set(page, initiatorMap);
-      this.#initiatorsByKey.set(page, initiatorByKey);
+      const cleanup = () => {
+        removeCdpEventListener(
+          client,
+          'Network.requestWillBeSent',
+          onRequestWillBeSent,
+        );
+      };
       this.#cdpListeners.set(page, cleanup);
-    } catch (error) {
-      if (listenerAttached) {
-        cleanup();
-      }
-      throw error;
+    } catch {
+      // Page might already be closed
     }
   }
 
@@ -896,11 +1054,7 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
   ): void {
     const navigations = this.storage.get(page) ?? [[]];
     const queue = navigations[0];
-    (withId as RequestWithNetworkMetadata)[responseBodyPageSymbol] = page;
     queue.push(withId);
-    getResponseBodyState(page).retained.add(
-      withId as RequestWithNetworkMetadata,
-    );
     while (queue.length > MAX_RETAINED_REQUESTS) {
       const evicted = queue.shift();
       if (evicted) {
@@ -937,24 +1091,13 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
       }
     }
 
-    const budget = getResponseBodyState(page);
-    const reclaimedBytes = budget.bytes;
-    budget.bytes = 0;
-    budget.generation++;
-    budget.retained.clear();
-    // Keep in-flight reservations until their body() calls actually settle.
-    // Releasing them here would let a new generation start another full batch
-    // while the invalidated buffers are still being allocated.
+    const budget = responseBodyBudget.get(page);
+    const reclaimedBytes = budget?.bytes ?? 0;
+    if (budget) {
+      budget.bytes = 0;
+    }
 
     if (navigations) {
-      for (const bucket of navigations) {
-        for (const request of bucket) {
-          const metadata = request as RequestWithNetworkMetadata;
-          delete metadata[responseBodyCacheSymbol];
-          delete metadata[responseBodySizeSymbol];
-          delete metadata[responseBodyPageSymbol];
-        }
-      }
       navigations.length = 1;
       navigations[0] = [];
     }
@@ -970,15 +1113,12 @@ export class NetworkCollector extends PageCollector<HTTPRequest> {
       return;
     }
     for (const request of evicted) {
-      const metadata = request as RequestWithNetworkMetadata;
-      budget.retained.delete(metadata);
-      const size = metadata[responseBodySizeSymbol];
+      const size = (request as RequestWithNetworkMetadata)[
+        responseBodySizeSymbol
+      ];
       if (typeof size === 'number') {
         budget.bytes -= size;
       }
-      delete metadata[responseBodyCacheSymbol];
-      delete metadata[responseBodySizeSymbol];
-      delete metadata[responseBodyPageSymbol];
     }
     if (budget.bytes < 0) {
       budget.bytes = 0;

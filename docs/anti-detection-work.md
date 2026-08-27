@@ -17,7 +17,7 @@ js-reverse-mcp 的反检测**分层清晰**：包装层（这个 MCP 本身）**
 │  • 提供 Closed Shadow Root 访问能力                         │
 ├────────────────────────────────────────────────────────────┤
 │ 源码层：CloakBrowser 二进制（仅 --cloak 模式）              │
-│  • 平台级 C++ patch：navigator.webdriver / canvas / WebGL / │
+│  • 49 个 C++ patch：navigator.webdriver / canvas / WebGL / │
 │    audio / fonts / GPU / 屏幕 / WebRTC / TLS               │
 │  • 指纹由 fingerprint seed 派生，按 profile 持久化         │
 └────────────────────────────────────────────────────────────┘
@@ -34,9 +34,9 @@ js-reverse-mcp 的反检测**分层清晰**：包装层（这个 MCP 本身）**
 
 | 维度                           | 默认模式                                      | `--cloak` 模式                                           |
 | ------------------------------ | --------------------------------------------- | -------------------------------------------------------- |
-| 浏览器二进制                   | 系统 Google Chrome                            | CloakBrowser 当前平台对应的定制 Chromium                 |
+| 浏览器二进制                   | 系统 Google Chrome                            | CloakBrowser 定制 Chromium（基于 145）                   |
 | 协议层 stealth                 | Patchright                                    | Patchright                                               |
-| 源码层 fingerprint patch       | 无                                            | 按平台提供的 C++ patch                                   |
+| 源码层 fingerprint patch       | 无                                            | 49 个 C++ patch                                          |
 | Profile 目录                   | `~/.cache/chrome-devtools-mcp/chrome-profile` | `~/.cache/chrome-devtools-mcp/cloak-profile`（物理隔离） |
 | Chrome Web Store / Google sync | ✅                                            | ❌（Chromium 不含 Google 闭源服务）                      |
 | 反爬通过率                     | 中等                                          | 高（30+ 站点测试通过）                                   |
@@ -169,5 +169,5 @@ list_network_requests()
 ## 进一步阅读
 
 - `--cloak` 完整指南、Profile 与指纹身份、双 MCP 实例配置：[cloak.md](cloak.md)
-- CloakBrowser 项目（源码层 patch 详解）：https://github.com/CloakHQ/CloakBrowser
+- CloakBrowser 项目（49 个 C++ patch 详解）：https://github.com/CloakHQ/CloakBrowser
 - Patchright 协议层 stealth 工作原理：https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-nodejs

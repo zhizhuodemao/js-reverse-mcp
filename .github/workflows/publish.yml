@@ -19,12 +19,8 @@ jobs:
           registry-url: https://registry.npmjs.org
 
       - run: npm ci
-
-      - name: Verify release tag matches package version
-        run: |
-          node -e "const expected = 'v' + require('./package.json').version; if (process.env.GITHUB_REF_NAME !== expected) { console.error('Release tag must be ' + expected + ', got ' + process.env.GITHUB_REF_NAME); process.exit(1); }"
-
-      - run: npm run presubmit
+      - run: npm run build
+      - run: npm test
 
       - run: npm publish
         env:

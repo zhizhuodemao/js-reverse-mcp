@@ -5,16 +5,16 @@
  */
 
 import {isUtf8} from 'node:buffer';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import type {DebuggerContext} from '../DebuggerContext.js';
-import {openLocalFileReadAllowed} from '../LocalFileAccess.js';
+import {CONSOLE_BRIDGE_SOURCE, ensureConsoleBridge} from '../consoleBridge.js';
 import {zod} from '../third_party/index.js';
 import type {JSHandle} from '../third_party/index.js';
-import {ToolError} from '../ToolError.js';
 
 import {ToolCategory} from './categories.js';
-import {createToolOutputSchema, defineTool} from './ToolDefinition.js';
+import {boolParam} from './paramHelpers.js';
+import {defineTool} from './ToolDefinition.js';
 
 // Default script evaluation timeout in milliseconds (30 seconds)
 const DEFAULT_SCRIPT_TIMEOUT = 30000;
@@ -30,99 +30,60 @@ interface LocalFileInput {
   text?: string;
 }
 
-async function loadLocalFile(
-  filePath: string,
-  signal?: AbortSignal,
-): Promise<LocalFileInput> {
-  signal?.throwIfAborted();
+function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(message)), ms);
+    }),
+  ]);
+}
+
+async function loadLocalFile(filePath: string): Promise<LocalFileInput> {
   if (filePath.startsWith('file://')) {
-    throw new ToolError(
-      'INVALID_ARGUMENT',
+    throw new Error(
       'localFilePath must be an absolute path, not a file:// URL.',
     );
   }
 
   if (filePath.startsWith('~')) {
-    throw new ToolError(
-      'INVALID_ARGUMENT',
+    throw new Error(
       'localFilePath must be an absolute path; ~ is not expanded.',
     );
   }
 
   if (!path.isAbsolute(filePath)) {
-    throw new ToolError(
-      'INVALID_ARGUMENT',
-      'localFilePath must be an absolute path.',
-    );
+    throw new Error('localFilePath must be an absolute path.');
   }
 
   if (/[{}[\]*?]/.test(filePath)) {
-    throw new ToolError(
-      'INVALID_ARGUMENT',
+    throw new Error(
       'localFilePath must point to one file; globs are not supported.',
     );
   }
 
-  let opened: Awaited<ReturnType<typeof openLocalFileReadAllowed>>;
-  try {
-    opened = await openLocalFileReadAllowed(filePath);
-  } catch (error) {
-    if (error instanceof ToolError) {
-      throw error;
-    }
-    throw new ToolError(
-      'IO_ERROR',
-      `Could not resolve localFilePath: ${error instanceof Error ? error.message : String(error)}`,
-      {cause: error},
+  const resolvedPath = path.resolve(filePath);
+  const stat = await fs.stat(resolvedPath).catch(error => {
+    throw new Error(
+      `Could not read localFilePath: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
+
+  if (!stat.isFile()) {
+    throw new Error('localFilePath must point to a regular file.');
+  }
+
+  if (stat.size > MAX_LOCAL_FILE_BYTES) {
+    throw new Error(
+      `localFilePath is too large (${stat.size} bytes). Maximum supported size is ${MAX_LOCAL_FILE_BYTES} bytes.`,
     );
   }
-  const {handle, resolvedPath, stat} = opened;
-  let data: Buffer;
-  try {
-    signal?.throwIfAborted();
 
-    if (stat.size > MAX_LOCAL_FILE_BYTES) {
-      throw new ToolError(
-        'INVALID_ARGUMENT',
-        `localFilePath is too large (${stat.size} bytes). Maximum supported size is ${MAX_LOCAL_FILE_BYTES} bytes.`,
-      );
-    }
-
-    const buffer = Buffer.allocUnsafe(MAX_LOCAL_FILE_BYTES + 1);
-    let offset = 0;
-    while (offset < buffer.length) {
-      signal?.throwIfAborted();
-      const {bytesRead} = await handle.read(
-        buffer,
-        offset,
-        buffer.length - offset,
-        offset,
-      );
-      if (bytesRead === 0) {
-        break;
-      }
-      offset += bytesRead;
-    }
-    if (offset > MAX_LOCAL_FILE_BYTES) {
-      throw new ToolError(
-        'INVALID_ARGUMENT',
-        `localFilePath exceeds the maximum supported size of ${MAX_LOCAL_FILE_BYTES} bytes.`,
-      );
-    }
-    data = buffer.subarray(0, offset);
-  } catch (error) {
-    if (
-      error instanceof ToolError ||
-      (error instanceof Error && error.name === 'AbortError')
-    ) {
-      throw error;
-    }
-    throw new ToolError('IO_ERROR', 'Could not read localFilePath.', {
-      cause: error,
-    });
-  } finally {
-    await handle.close();
-  }
+  const data = await fs.readFile(resolvedPath);
   const localFile: LocalFileInput = {
     path: resolvedPath,
     name: path.basename(resolvedPath),
@@ -137,96 +98,55 @@ async function loadLocalFile(
   return localFile;
 }
 
-async function runCancellableEvaluation<T>(
-  signal: AbortSignal | undefined,
-  debugger_: DebuggerContext,
-  operation: () => Promise<T>,
-): Promise<T> {
-  const terminate = () => {
-    void debugger_.terminateExecution().catch(() => undefined);
-  };
-  signal?.throwIfAborted();
-  signal?.addEventListener('abort', terminate, {once: true});
-  try {
-    return await operation();
-  } finally {
-    signal?.removeEventListener('abort', terminate);
-  }
-}
-
 export const evaluateScript = defineTool({
   name: 'evaluate_script',
-  description:
-    "Evaluates one focused JavaScript function for DOM/page state, web storage, page-defined globals, a paused-frame expression, or browser-side processing of one local file. Use it when those runtime values are the goal and no narrower evidence tool applies. Do not use document.cookie or page evaluation to investigate HttpOnly/Secure cookies, Set-Cookie provenance, or captured HTTP evidence; use list_network_requests with cookieName/reqid, and use search_in_sources/get_script_source for source discovery. While running, evaluation uses the selected frame's isolated world by default or its page main world with mainWorld=true; while paused, it always uses the chosen call frame and ignores mainWorld. Call get_paused_info before paused evaluation, then step or resume when finished. Arbitrary code can change page/external state and requires confirm=true; inline results are bounded, so use outputFile for exact large or binary results.",
+  description: `Evaluate a JavaScript function inside the currently selected page. Returns the response as JSON
+so returned values have to JSON-serializable. Inline JSON results are bounded; use outputFile for exact large results. When execution is paused at a breakpoint, automatically evaluates in the paused call frame context. Use localFilePath when the function needs one local data file, commonly a network body or JSON exported by another tool. The MCP server reads the file and passes it as localFile; browser JavaScript does not read local paths.`,
   annotations: {
-    title: 'Evaluate Script',
     category: ToolCategory.DEBUGGING,
     readOnlyHint: false,
-    destructiveHint: true,
-    openWorldHint: true,
   },
-  capabilities: ['debugger'],
-  timeoutMs: DEFAULT_SCRIPT_TIMEOUT,
-  outputSchema: createToolOutputSchema({
-    resultType: zod.string().optional(),
-    value: zod.unknown().optional(),
-    filename: zod.string().optional(),
-    byteLength: zod.number().int().optional(),
-    charLength: zod.number().int().optional(),
-    truncated: zod.boolean().optional(),
-  }),
   schema: {
-    confirm: zod
-      .boolean()
-      .default(false)
-      .describe(
-        'Must be true to authorize this exact arbitrary-code evaluation, which may mutate page state, send requests, or cause external side effects. Prefer a read-only expression when inspection is sufficient.',
-      ),
-    function: zod
-      .string()
-      .describe(
-        'JavaScript function declaration invoked by the tool, for example `() => document.title` or `async () => await Promise.resolve(location.href)`. Return JSON-serializable data; ArrayBuffer/typed arrays require outputFile for exact bytes. With localFilePath, accept `async ({localFile}) => ...` and read localFile.text for UTF-8 or localFile.base64 for exact bytes. Keep the function focused; use mainWorld=true only when page-defined globals are required.',
-      ),
-    mainWorld: zod
-      .boolean()
+    function: zod.string().describe(
+      `A JavaScript function declaration to be executed by the tool in the currently selected page.
+Example without arguments: \`() => {
+  return document.title
+}\` or \`async () => {
+  return await fetch("example.com")
+}\`.
+If localFilePath is provided, the function receives one argument: \`async ({ localFile }) => { ... }\`. Use localFile.text when present for UTF-8 text/JSON and localFile.base64 for exact bytes. To keep data for later calls, assign it explicitly in JavaScript, for example \`window.__mcpPayload = JSON.parse(localFile.text)\` with mainWorld=true.
+`,
+    ),
+    mainWorld: boolParam()
       .optional()
       .default(false)
       .describe(
-        "Running-page mode only: false uses the selected frame's isolated context; true uses that frame's page main world to access application-defined globals. When execution is paused, evaluation always targets frameIndex and this option is ignored.",
+        'Execute the function in the page main world instead of the default isolated context. ' +
+          'Use this when you need to access page-defined globals (e.g. window.bdms, window.app). ' +
+          'Async functions are supported, and returned values must be JSON-serializable unless outputFile is used for binary data.',
       ),
     frameIndex: zod
       .number()
       .int()
       .optional()
       .describe(
-        'Paused mode only: zero-based call frame from get_paused_info (default: top frame). The index and its callFrameId expire after any step or resume.',
+        'When paused at a breakpoint, which call frame to evaluate in (0 = top frame). ' +
+          'If omitted, uses the top frame. Use get_paused_info to see available frames.',
       ),
     outputFile: zod
       .string()
       .optional()
       .describe(
-        'Save the exact result locally instead of returning bounded inline content. JSON-serializable values are written as JSON text and ArrayBuffer/typed arrays as raw bytes; the returned filename is resolved and subject to --allowedRoots.',
-      ),
-    confirmOverwrite: zod
-      .boolean()
-      .default(false)
-      .describe(
-        'Set true only to authorize replacing an existing outputFile. A new file does not require overwrite confirmation.',
+        'If provided, saves the evaluation result to this local file path instead of returning it in the chat. JSON-serializable results are saved as JSON text; ArrayBuffer and Uint8Array results are saved as raw bytes. Useful for dumping large data or binary memory regions. The response reports the resolved absolute path.',
       ),
     localFilePath: zod
       .string()
       .optional()
       .describe(
-        'Absolute path to one host file passed as localFile; the browser never reads the path directly. Relative paths, file:// URLs, globs, ~, and directories are rejected, access is subject to --allowedRoots, and file contents may expose sensitive host data.',
+        'Absolute path to one local file to pass to the evaluated function as localFile. Relative paths, file:// URLs, globs, ~, and directories are rejected. If provided, write the function as async ({ localFile }) => { ... }. Use localFile.text when present for UTF-8 text/JSON and localFile.base64 for exact bytes.',
       ),
   },
   handler: async (request, response, context) => {
-    if (!request.params.confirm) {
-      throw new ToolError(
-        'CONFIRMATION_REQUIRED',
-        'evaluate_script requires confirm=true because the supplied function can cause page and external side effects.',
-      );
-    }
     const {
       function: fnString,
       mainWorld,
@@ -235,7 +155,7 @@ export const evaluateScript = defineTool({
       localFilePath,
     } = request.params;
     const localFile = localFilePath
-      ? await loadLocalFile(localFilePath, request.signal)
+      ? await loadLocalFile(localFilePath)
       : undefined;
 
     if (localFile) {
@@ -247,6 +167,25 @@ export const evaluateScript = defineTool({
     const callExpression = localFile
       ? `(${fnString})(${JSON.stringify({localFile})})`
       : `(${fnString})()`;
+
+    const wrapResultSync = () => `(() => {
+      try {
+        const result = ${callExpression};
+        if (result instanceof ArrayBuffer || ArrayBuffer.isView(result)) {
+          const buffer = result.buffer || result;
+          const bytes = new Uint8Array(buffer, result.byteOffset || 0, result.byteLength || result.length);
+          let binary = '';
+          const chunkSize = 8192;
+          for (let i = 0; i < bytes.length; i += chunkSize) {
+            binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
+          }
+          return JSON.stringify({ type: 'base64', data: btoa(binary) });
+        }
+        return JSON.stringify({ type: 'json', data: JSON.stringify(result) });
+      } catch (e) {
+        return JSON.stringify({ type: 'error', data: e.message || String(e) });
+      }
+    })()`;
 
     const wrapResultAsync = () => `async () => {
       try {
@@ -276,28 +215,6 @@ export const evaluateScript = defineTool({
       }
     }`;
 
-    const wrapPausedResult = () => `() => {
-      try {
-        const result = ${callExpression};
-        if (result instanceof Promise) {
-          return result;
-        }
-        if (result instanceof ArrayBuffer || ArrayBuffer.isView(result)) {
-          const buffer = result.buffer || result;
-          const bytes = new Uint8Array(buffer, result.byteOffset || 0, result.byteLength || result.length);
-          let binary = '';
-          const chunkSize = 8192;
-          for (let i = 0; i < bytes.length; i += chunkSize) {
-            binary += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + chunkSize)));
-          }
-          return JSON.stringify({ type: 'base64', data: btoa(binary) });
-        }
-        return JSON.stringify({ type: 'json', data: JSON.stringify(result) });
-      } catch (e) {
-        return JSON.stringify({ type: 'error', data: e.message || String(e) });
-      }
-    }`;
-
     const handleEvalResult = async (rawString: string) => {
       let parsed: {type: string; data: string};
       try {
@@ -307,52 +224,33 @@ export const evaluateScript = defineTool({
       }
 
       if (parsed.type === 'error') {
-        throw new ToolError(
-          'CDP_ERROR',
-          `Script evaluation error: ${parsed.data}`,
-        );
+        throw new Error(`Script evaluation error: ${parsed.data}`);
       }
 
       if (outputFile) {
         if (parsed.type === 'base64') {
           const binaryData = Buffer.from(parsed.data, 'base64');
-          const res = await context.saveFile(binaryData, outputFile, {
-            confirmOverwrite: request.params.confirmOverwrite,
-          });
+          const res = await context.saveFile(binaryData, outputFile);
           response.appendResponseLine(
             `Saved binary memory dump to ${res.filename} (${binaryData.length} bytes).`,
           );
-          response.setStructuredContent({
-            resultType: 'binary_file',
-            filename: res.filename,
-            byteLength: binaryData.length,
-          });
         } else {
           const textData = new TextEncoder().encode(
             parsed.data === undefined ? 'undefined' : parsed.data,
           );
-          const res = await context.saveFile(textData, outputFile, {
-            confirmOverwrite: request.params.confirmOverwrite,
-          });
+          const res = await context.saveFile(textData, outputFile);
           response.appendResponseLine(
             `Saved JSON result to ${res.filename} (${textData.length} bytes).`,
           );
-          response.setStructuredContent({
-            resultType: 'json_file',
-            filename: res.filename,
-            byteLength: textData.length,
-          });
         }
         return;
       }
 
       response.appendResponseLine('Script ran on page and returned:');
       if (parsed.type === 'base64') {
-        const byteLength = Buffer.from(parsed.data, 'base64').length;
         response.appendResponseLine(
-          `[Binary Data: ${byteLength} bytes. Use outputFile to save to disk.]`,
+          `[Binary Data: ${Buffer.from(parsed.data, 'base64').length} bytes. Use outputFile to save to disk.]`,
         );
-        response.setStructuredContent({resultType: 'binary', byteLength});
       } else {
         const data = parsed.data ?? 'undefined';
         const truncated = data.length > INLINE_EVAL_RESULT_LIMIT;
@@ -368,28 +266,13 @@ export const evaluateScript = defineTool({
             : data,
         );
         response.appendResponseLine('```');
-        let value: unknown = data;
-        try {
-          value = JSON.parse(data);
-        } catch {
-          // Keep non-JSON values as their serialized string.
-        }
-        response.setStructuredContent({
-          resultType: 'json',
-          value: truncated
-            ? `${data.slice(0, INLINE_EVAL_RESULT_LIMIT)}...`
-            : value,
-          truncated,
-          charLength: data.length,
-        });
       }
     };
 
     const debugger_ = context.debuggerContext;
     if (debugger_.isEnabled() && debugger_.isPaused()) {
       if (localFile && localFile.size > MAX_PAUSED_LOCAL_FILE_BYTES) {
-        throw new ToolError(
-          'INVALID_ARGUMENT',
+        throw new Error(
           `localFilePath is too large for paused call-frame evaluation (${localFile.size} bytes). Maximum supported paused size is ${MAX_PAUSED_LOCAL_FILE_BYTES} bytes.`,
         );
       }
@@ -403,89 +286,109 @@ export const evaluateScript = defineTool({
       }
       const callFrameId = pausedState.callFrames[frameIdx]?.callFrameId;
       if (callFrameId) {
-        const result = await debugger_.evaluateSettledPromiseOnCallFrame(
+        const result = await debugger_.evaluateOnCallFrame(
           callFrameId,
-          `(${wrapPausedResult()})()`,
+          wrapResultSync(),
+          {returnByValue: true},
         );
 
         if (result.exceptionDetails) {
           const errMsg =
             result.exceptionDetails.exception?.description ||
             result.exceptionDetails.text;
-          throw new ToolError(
-            'CDP_ERROR',
-            `Script evaluation error: ${errMsg}`,
-          );
+          throw new Error(`Script evaluation error: ${errMsg}`);
         }
 
-        if (
-          result.settledPromise &&
-          (result.result.subtype === 'arraybuffer' ||
-            result.result.subtype === 'typedarray')
-        ) {
-          throw new ToolError(
-            'PRECONDITION_FAILED',
-            'Paused async binary results cannot be serialized safely. Resume execution or return JSON-serializable data.',
-          );
-        }
-        const settledValue =
-          result.settledPromise && result.result.objectId
-            ? await debugger_.materializeRemoteObject(result.result)
-            : result.result.value;
-        const rawResult = result.settledPromise
-          ? JSON.stringify({
-              type: 'json',
-              data: JSON.stringify(settledValue),
-            })
-          : (settledValue as string);
-        await handleEvalResult(rawResult);
+        await handleEvalResult(result.result.value as string);
         return;
       }
     }
 
+    await ensureConsoleBridge(context.getSelectedFrame());
+
     if (mainWorld) {
       const frame = context.getSelectedFrame();
-      const result = await runCancellableEvaluation(
-        request.signal,
-        debugger_,
-        async () => {
-          // Patchright defaults evaluate() to its utility world. Its third
-          // parameter selects the frame's main world directly. This preserves
-          // the selected iframe execution context and avoids the CSP-blocked
-          // inline <script> bridge previously used here.
-          return await frame.evaluate(
-            `(${wrapResultAsync()})()`,
-            undefined,
-            false,
-          );
-        },
+      const bridgeId = `__mcp_bridge_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const result = await withTimeout(
+        frame.evaluate(
+          async ({bridge, fn, id}) => {
+            const el = document.createElement('div');
+            el.id = id;
+            el.style.display = 'none';
+            document.documentElement.appendChild(el);
+
+            const bridgeScript = document.createElement('script');
+            bridgeScript.textContent = bridge;
+            document.documentElement.appendChild(bridgeScript);
+            bridgeScript.remove();
+
+            const script = document.createElement('script');
+            script.textContent = `
+            (async function() {
+              var el = document.getElementById(${JSON.stringify(id)});
+              try {
+                var result = await (${fn})();
+                el.setAttribute('data-result', result);
+              } catch(e) {
+                el.setAttribute('data-error', e.message || String(e));
+              }
+            })();
+          `;
+            document.documentElement.appendChild(script);
+            script.remove();
+
+            // Wait for result
+            return new Promise<string>((resolve, reject) => {
+              const check = () => {
+                if (!document.getElementById(id))
+                  return reject(new Error('Bridge element removed'));
+                const err = el.getAttribute('data-error');
+                if (err) {
+                  el.remove();
+                  return reject(new Error(err));
+                }
+                const res = el.getAttribute('data-result');
+                if (res !== null) {
+                  el.remove();
+                  return resolve(res);
+                }
+                setTimeout(check, 50);
+              };
+              check();
+            });
+          },
+          {bridge: CONSOLE_BRIDGE_SOURCE, fn: wrapResultAsync(), id: bridgeId},
+        ),
+        DEFAULT_SCRIPT_TIMEOUT,
+        'Script evaluation timed out',
       );
 
-      await handleEvalResult(result as string);
+      await handleEvalResult(result);
       return;
     }
 
     let fnHandle: JSHandle<unknown> | undefined;
     try {
       const frame = context.getSelectedFrame();
-      fnHandle = await runCancellableEvaluation(request.signal, debugger_, () =>
+      fnHandle = await withTimeout(
         frame.evaluateHandle(`(${wrapResultAsync()})`),
+        DEFAULT_SCRIPT_TIMEOUT,
+        'Script evaluation timed out',
       );
       await context.waitForEventsAfterAction(async () => {
-        const result = await runCancellableEvaluation(
-          request.signal,
-          debugger_,
-          () =>
-            frame.evaluate(async fn => {
-              // @ts-expect-error no types.
-              return await fn();
-            }, fnHandle),
+        const result = await withTimeout(
+          frame.evaluate(async fn => {
+            // @ts-expect-error no types.
+            return await fn();
+          }, fnHandle),
+          DEFAULT_SCRIPT_TIMEOUT,
+          'Script execution timed out',
         );
         await handleEvalResult(result as string);
       });
     } finally {
       if (fnHandle) {
-        await fnHandle.dispose();
+        void fnHandle.dispose();
       }
     }
   },
